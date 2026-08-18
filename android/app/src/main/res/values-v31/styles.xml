@@ -1,0 +1,13 @@
+<resources>
+
+    <!--
+      Android 12+ draws its own splash window. These attributes point it at the
+      same mark and background colour so the hand-off is invisible.
+    -->
+    <style name="BootTheme" parent="AppTheme">
+        <item name="android:windowSplashScreenBackground">@color/brand_indigo_deep</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_foreground</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/brand_indigo_mid</item>
+    </style>
+
+</resources>

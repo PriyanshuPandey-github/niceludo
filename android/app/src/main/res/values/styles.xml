@@ -1,0 +1,17 @@
+<resources>
+
+    <!-- Base application theme. -->
+    <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
+        <item name="android:windowBackground">@color/brand_indigo_deep</item>
+    </style>
+
+    <!--
+      Shown from process start until React Native draws its first frame.
+      MainActivity swaps back to AppTheme in onCreate.
+    -->
+    <style name="BootTheme" parent="AppTheme">
+        <item name="android:windowBackground">@drawable/launch_screen</item>
+    </style>
+
+</resources>
