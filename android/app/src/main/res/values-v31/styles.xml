@@ -1,0 +1,13 @@
+<resources>
+
+    <!--
+      Android 12+ draws its own splash window. It shows only the backdrop
+      colour (the icon is blank), and the animated JS splash takes over from
+      it without a visible change.
+    -->
+    <style name="BootTheme" parent="AppTheme">
+        <item name="android:windowSplashScreenBackground">@color/splash_backdrop</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_icon_blank</item>
+    </style>
+
+</resources>

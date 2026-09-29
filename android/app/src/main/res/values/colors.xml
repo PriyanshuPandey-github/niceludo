@@ -1,0 +1,6 @@
+<resources>
+    <!-- The launch backdrop: first frame of the JS splash (SPLASH_BACKDROP). -->
+    <color name="splash_backdrop">#2E080B</color>
+    <!-- Adaptive icon background: the deep red at the edge of the artwork. -->
+    <color name="icon_red">#6E161B</color>
+</resources>

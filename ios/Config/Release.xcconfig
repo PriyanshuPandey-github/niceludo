@@ -1,0 +1,8 @@
+// Release flavor: "Spider Ludo" (com.niceludo).
+// Ships the JS bundle inside the app; this is what goes to the App Store.
+#include? "../Pods/Target Support Files/Pods-NiceLudo/Pods-NiceLudo.release.xcconfig"
+#include "Version.xcconfig"
+
+PRODUCT_BUNDLE_IDENTIFIER = com.niceludo
+APP_DISPLAY_NAME = Spider Ludo
+ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon

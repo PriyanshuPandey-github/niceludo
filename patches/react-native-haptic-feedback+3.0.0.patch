@@ -1,0 +1,186 @@
+diff --git a/node_modules/react-native-haptic-feedback/ios/RNHapticFeedback/RNHapticFeedback.mm b/node_modules/react-native-haptic-feedback/ios/RNHapticFeedback/RNHapticFeedback.mm
+index a8de79d..e6b4656 100644
+--- a/node_modules/react-native-haptic-feedback/ios/RNHapticFeedback/RNHapticFeedback.mm
++++ b/node_modules/react-native-haptic-feedback/ios/RNHapticFeedback/RNHapticFeedback.mm
+@@ -5,6 +5,10 @@
+ @interface RNHapticFeedback()
+ @property (nonatomic, strong) CHHapticEngine *engine;
+ @property (nonatomic, strong) id<CHHapticPatternPlayer> hapticPlayer;
++// NiceLudo patch: kept, prepared generators so taps fire without warm-up lag
++@property (nonatomic, strong) NSMutableDictionary<NSNumber *, UIImpactFeedbackGenerator *> *impactGenerators;
++@property (nonatomic, strong) UISelectionFeedbackGenerator *selectionGenerator;
++@property (nonatomic, strong) UINotificationFeedbackGenerator *notificationGenerator;
+ @end
+ 
+ @implementation RNHapticFeedback
+@@ -36,13 +40,24 @@ - (void)initEngine
+         return;
+     }
+ 
++    // NiceLudo patch: haptics only, so the engine is independent of the app's
++    // audio session - the sound engine (re)configuring that session would
++    // otherwise stop it - and never shut down on its own.
++    _engine.playsHapticsOnly = YES;
++    _engine.autoShutdownEnabled = NO;
++
+     __weak __typeof__(self) weakSelf = self;
++    // NiceLudo patch: only forget the engine that actually stopped. The handler
++    // runs late, after a replacement engine may already have been made.
++    __weak CHHapticEngine *thisEngine = _engine;
+     _engine.stoppedHandler = ^(CHHapticEngineStoppedReason reason) {
+         __strong __typeof__(weakSelf) strongSelf = weakSelf;
+         if (strongSelf) {
+             dispatch_async(dispatch_get_main_queue(), ^{
+-                strongSelf.engine = nil;
+-                strongSelf.hapticPlayer = nil;
++                if (strongSelf.engine == thisEngine) {
++                    strongSelf.engine = nil;
++                    strongSelf.hapticPlayer = nil;
++                }
+             });
+         }
+     };
+@@ -177,60 +192,95 @@ - (CHHapticEvent *)makeTransientEvent:(NSTimeInterval)time
+ 
+ // MARK: - UIKit fallback (Taptic Engine devices without Core Haptics, e.g. iPhone 6s/7/SE 1st gen)
+ 
++- (void)impact:(UIImpactFeedbackStyle)style
++{
++    if (!_impactGenerators) {
++        _impactGenerators = [NSMutableDictionary new];
++    }
++    UIImpactFeedbackGenerator *g = _impactGenerators[@(style)];
++    if (!g) {
++        g = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
++        _impactGenerators[@(style)] = g;
++    }
++    [g impactOccurred];
++    [g prepare]; // stay warm for the next tap
++}
++
++- (void)notify:(UINotificationFeedbackType)kind
++{
++    if (!_notificationGenerator) {
++        _notificationGenerator = [UINotificationFeedbackGenerator new];
++    }
++    [_notificationGenerator notificationOccurred:kind];
++    [_notificationGenerator prepare];
++}
++
+ - (void)playUIKitHaptic:(NSString *)type
+ {
+     if ([type isEqual:@"notificationSuccess"]) {
+-        UINotificationFeedbackGenerator *g = [UINotificationFeedbackGenerator new];
+-        [g notificationOccurred:UINotificationFeedbackTypeSuccess];
++        [self notify:UINotificationFeedbackTypeSuccess];
+     } else if ([type isEqual:@"notificationWarning"]) {
+-        UINotificationFeedbackGenerator *g = [UINotificationFeedbackGenerator new];
+-        [g notificationOccurred:UINotificationFeedbackTypeWarning];
++        [self notify:UINotificationFeedbackTypeWarning];
+     } else if ([type isEqual:@"notificationError"] || [type isEqual:@"reject"]) {
+-        UINotificationFeedbackGenerator *g = [UINotificationFeedbackGenerator new];
+-        [g notificationOccurred:UINotificationFeedbackTypeError];
+-    } else if ([type isEqual:@"impactLight"] || [type isEqual:@"soft"]
++        [self notify:UINotificationFeedbackTypeError];
++    } else if ([type isEqual:@"soft"]) {
++        [self impact:UIImpactFeedbackStyleSoft];
++    } else if ([type isEqual:@"rigid"]) {
++        [self impact:UIImpactFeedbackStyleRigid];
++    } else if ([type isEqual:@"impactLight"]
+                || [type isEqual:@"effectTick"] || [type isEqual:@"clockTick"]
+                || [type isEqual:@"gestureStart"] || [type isEqual:@"segmentTick"]
+                || [type isEqual:@"segmentFrequentTick"] || [type isEqual:@"textHandleMove"]) {
+-        UIImpactFeedbackGenerator *g = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+-        [g impactOccurred];
+-    } else if ([type isEqual:@"impactHeavy"] || [type isEqual:@"rigid"]
++        [self impact:UIImpactFeedbackStyleLight];
++    } else if ([type isEqual:@"impactHeavy"]
+                || [type isEqual:@"effectHeavyClick"] || [type isEqual:@"longPress"]) {
+-        UIImpactFeedbackGenerator *g = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
+-        [g impactOccurred];
++        [self impact:UIImpactFeedbackStyleHeavy];
+     } else if ([type isEqual:@"selection"] || [type isEqual:@"keyboardPress"]
+                || [type isEqual:@"keyboardRelease"] || [type isEqual:@"keyboardTap"]
+                || [type isEqual:@"virtualKey"] || [type isEqual:@"virtualKeyRelease"]
+                || [type isEqual:@"gestureEnd"] || [type isEqual:@"contextClick"]) {
+-        UISelectionFeedbackGenerator *g = [UISelectionFeedbackGenerator new];
+-        [g selectionChanged];
++        if (!_selectionGenerator) {
++            _selectionGenerator = [UISelectionFeedbackGenerator new];
++        }
++        [_selectionGenerator selectionChanged];
++        [_selectionGenerator prepare];
+     } else if ([type isEqual:@"noHaptics"]) {
+         // explicit no-op
+     } else {
+         // impactMedium, confirm, toggleOn, toggleOff, effectClick, effectDoubleClick,
+-        // effectHeavyClick, dragStart, gestureThresholdActivate, gestureThresholdDeactivate
++        // dragStart, gestureThresholdActivate, gestureThresholdDeactivate
+         // and any unrecognised type
+-        UIImpactFeedbackGenerator *g = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+-        [g impactOccurred];
++        [self impact:UIImpactFeedbackStyleMedium];
+     }
+ }
+ 
+ - (void)playEvents:(NSArray<CHHapticEvent *> *)events
+ {
+     if (events.count == 0) return;
+-    [self initEngine];
+-    if (!_engine) return;
+ 
+     NSError *error = nil;
+     CHHapticPattern *pattern = [[CHHapticPattern alloc]
+         initWithEvents:events parameters:@[] error:&error];
+-    if (error) return;
+-
+-    id<CHHapticPatternPlayer> player = [_engine createPlayerWithPattern:pattern error:&error];
+-    if (error) return;
+-
+-    _hapticPlayer = player;
+-    [player startAtTime:CHHapticTimeImmediate error:&error];
++    if (!pattern) return;
++
++    // NiceLudo patch: the system can stop the engine (backgrounding, audio
++    // route changes) before its stoppedHandler has run, and a stopped engine
++    // plays nothing without saying so. Start it every time - a no-op when it
++    // is running - and if playing still fails, build a fresh engine once.
++    for (int attempt = 0; attempt < 2; attempt++) {
++        [self initEngine];
++        if (!_engine) return;
++        error = nil;
++        [_engine startAndReturnError:&error];
++        id<CHHapticPatternPlayer> player =
++            [_engine createPlayerWithPattern:pattern error:&error];
++        if (player && [player startAtTime:CHHapticTimeImmediate error:&error]) {
++            _hapticPlayer = player;
++            return;
++        }
++        _engine = nil;
++        _hapticPlayer = nil;
++    }
+ }
+ 
+ // MARK: - Exported methods
+@@ -244,17 +294,11 @@ - (void)playEvents:(NSArray<CHHapticEvent *> *)events
+ {
+     BOOL enableVibrateFallback = [[options objectForKey:@"enableVibrateFallback"] boolValue];
+ #endif
+-    if ([CHHapticEngine capabilitiesForHardware].supportsHaptics) {
+-        // Best path: Core Haptics — per-type patterns on iPhone 8+ / iPad Pro
+-        [self playEvents:[self eventsForType:type]];
+-        return;
+-    }
+-    // Intermediate fallback: UIKit feedback generators — per-type on devices with
+-    // a Taptic Engine but without Core Haptics (iPhone 6s, 7, SE 1st gen on iOS 13+).
++    // NiceLudo patch: every single tap goes through the UIKit feedback
++    // generators - the path the system's own controls use, which plays
++    // reliably alongside the app's audio - rather than a Core Haptics engine.
++    // Timed sequences are built from JS by triggering at the right moments.
+     // Silent no-op on devices with no Taptic Engine at all (e.g. iPod touch).
+-    // Note: enableVibrateFallback is NOT triggered here. On iOS 13+ all iPhones
+-    // capable of running this SDK have a Taptic Engine, so UIKit already handles them.
+-    // Adding AudioServicesPlaySystemSound here would cause a double-fire on 6s/7.
+     [self playUIKitHaptic:type];
+     (void)enableVibrateFallback; // consumed; not used on UIKit path
+ }
