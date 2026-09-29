@@ -20,6 +20,7 @@ import {
   ColorId,
   DiceStats,
   Difficulty,
+  GameMode,
   FINISHED,
   GameEvent,
   GameState,
@@ -40,6 +41,7 @@ export const createGame = (
   seats: SeatConfig[],
   difficulty: Difficulty = 'normal',
   seed?: number[],
+  mode: GameMode = 'cpu',
 ): GameState => {
   // Seats always play in clockwise board order, whatever order they were
   // configured in, so the turn rotation matches what the player sees.
@@ -50,6 +52,7 @@ export const createGame = (
       color: seat.color,
       type: seat.type,
       name: seat.name,
+      ...(seat.country ? { country: seat.country } : {}),
       tokens: new Array(TOKENS_PER_PLAYER).fill(IN_BASE),
       rank: null,
     }));
@@ -64,6 +67,7 @@ export const createGame = (
     rng: createRng(seed),
     stats: emptyDiceStats(players.length),
     difficulty,
+    mode,
     turnCount: 0,
     startedAt: now,
     updatedAt: now,

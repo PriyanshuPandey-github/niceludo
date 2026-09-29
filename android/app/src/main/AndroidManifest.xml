@@ -1,7 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!--
-      No INTERNET permission: Nice Ludo is fully offline. The debug variant
+      No INTERNET permission: Spider Ludo is fully offline. The debug variant
       adds it back (see src/debug/AndroidManifest.xml) purely so Metro can
       serve the JS bundle during development.
     -->

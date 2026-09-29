@@ -1,0 +1,17 @@
+diff --git a/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioSessionManager.mm b/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioSessionManager.mm
+index d115837..50a5e13 100644
+--- a/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioSessionManager.mm
++++ b/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioSessionManager.mm
+@@ -513,7 +513,11 @@ - (AVAudioSessionCategoryOptions)optionsFromArray:(NSArray *)optionsArray
+     }
+ 
+     if ([option isEqualToString:@"allowBluetoothHFP"]) {
+-      options |= AVAudioSessionCategoryOptionAllowBluetoothHFP;
++      // NiceLudo patch: AVAudioSessionCategoryOptionAllowBluetoothHFP only
++      // exists in the iOS 26 SDK (Xcode 26). It has the same value, 0x4, as
++      // AVAudioSessionCategoryOptionAllowBluetooth in older SDKs, so use the
++      // raw value to build with Xcode 16 too (as 0.11.x of this library did).
++      options |= (AVAudioSessionCategoryOptions)0x4;
+       continue;
+     }
+ 

@@ -9,9 +9,16 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { GameState, PlayerState } from '../engine';
-import { PLAYER_COLORS, colors, radius, shadow } from '../theme/theme';
+import {
+  PLAYER_COLORS,
+  PieceTheme,
+  colors,
+  radius,
+  shadow,
+} from '../theme/theme';
 import { Button } from './ui';
 import { Pawn } from './Pawn';
+import { CountryChip } from './CountryChip';
 
 const CONFETTI_COUNT = 28;
 
@@ -29,7 +36,7 @@ const Confetti = ({ width, height }: { width: number; height: number }) => {
           PLAYER_COLORS[1].base,
           PLAYER_COLORS[2].base,
           PLAYER_COLORS[3].base,
-          colors.gold,
+          colors.accent,
         ][index % 5],
         spin: Math.random() > 0.5 ? 1 : -1,
       })),
@@ -113,11 +120,13 @@ const ordinal = (rank: number): string =>
 export const WinnerOverlay = ({
   visible,
   state,
+  pieceTheme = 'disc',
   onRematch,
   onHome,
 }: {
   visible: boolean;
   state: GameState;
+  pieceTheme?: PieceTheme;
   onRematch: () => void;
   onHome: () => void;
 }) => {
@@ -159,7 +168,12 @@ export const WinnerOverlay = ({
         >
           <Text style={styles.kicker}>Game over</Text>
           <View style={styles.winnerRow}>
-            <Pawn color={winner.color} height={64} />
+            <Pawn
+              color={winner.color}
+              height={64}
+              theme={pieceTheme}
+              mood="happy"
+            />
             <View style={styles.winnerText}>
               <Text style={styles.winnerName}>{winner.name} wins</Text>
               <Text style={styles.winnerColor}>
@@ -179,9 +193,13 @@ export const WinnerOverlay = ({
                   ]}
                 />
                 <Text style={styles.playerName}>{player.name}</Text>
-                <Text style={styles.playerMeta}>
-                  {player.type === 'cpu' ? 'CPU' : 'Player'}
-                </Text>
+                {player.country ? (
+                  <CountryChip country={player.country} />
+                ) : (
+                  <Text style={styles.playerMeta}>
+                    {player.type === 'cpu' ? 'CPU' : 'Player'}
+                  </Text>
+                )}
               </View>
             ))}
           </View>
@@ -203,7 +221,7 @@ export const WinnerOverlay = ({
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: 'rgba(4,7,20,0.86)',
+    backgroundColor: 'rgba(20,3,5,0.86)',
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,
@@ -211,7 +229,7 @@ const styles = StyleSheet.create({
   card: {
     width: '100%',
     maxWidth: 420,
-    backgroundColor: '#141C40',
+    backgroundColor: colors.surfaceSolid,
     borderRadius: radius.xl,
     borderWidth: 1,
     borderColor: colors.border,
@@ -219,7 +237,7 @@ const styles = StyleSheet.create({
     ...shadow.card,
   },
   kicker: {
-    color: colors.gold,
+    color: colors.accent,
     fontSize: 12,
     fontWeight: '800',
     letterSpacing: 2.4,
@@ -244,7 +262,7 @@ const styles = StyleSheet.create({
   },
   rank: {
     width: 40,
-    color: colors.gold,
+    color: colors.accent,
     fontWeight: '900',
     fontSize: 13,
   },

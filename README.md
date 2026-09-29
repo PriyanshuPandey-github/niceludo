@@ -1,6 +1,6 @@
-# Nice Ludo
+# Spider Ludo
 
-A premium, fully offline Ludo game for **Android**, built with the React Native
+A premium, fully offline Ludo game for **Android and iOS**, built with the React Native
 CLI (no Expo). Two to four seats, any mix of pass-and-play humans and CPUs, any
 colour arrangement — and dice that are provably even for everyone at the table.
 
@@ -9,6 +9,11 @@ npm install
 npm run android          # debug build on a connected device/emulator
 npm run build:apk        # release APK  -> android/app/build/outputs/apk/release
 npm run build:aab        # release AAB  -> android/app/build/outputs/bundle/release
+
+npm run pods             # iOS: install CocoaPods (first time / after dep changes)
+npm run ios              # iOS debug flavor   ("Spider Ludo Dev") on a simulator
+npm run ios:release      # iOS release flavor ("Spider Ludo") on a simulator
+npm run build:ipa        # App Store archive -> ios/build/NiceLudo.xcarchive
 ```
 
 ---
@@ -105,16 +110,22 @@ foreign save file is ignored rather than crashing the board.
 Every asset is original to this project — nothing is copied from any existing
 Ludo app.
 
-- The board, pawns, dice, logo and backgrounds are **vector drawings** in
+- The board, pawns, dice and backgrounds are **vector drawings** in
   `react-native-svg` (`src/components/`), so they are pin-sharp at any density
   and cost nothing in APK size.
-- The launcher icon (legacy, round and adaptive foreground) and the splash logo
-  are rendered by `scripts/gen-assets.js` — a dependency-free rasteriser that
-  draws signed-distance shapes and encodes PNGs with Node's own `zlib`. Run
-  `npm run assets` to regenerate them; the artwork is code, not opaque binaries.
-- The Android launch screen (`res/drawable/launch_screen.xml`, plus the API 31+
-  splash attributes in `res/values-v31/`) uses the same mark and the same
-  gradient as the in-app splash, so the hand-off has no white flash.
+- The Android launcher icon (legacy, round and adaptive foreground), the iOS
+  app icons (release, plus a debug variant with an orange corner sash) and the
+  in-app copy (`src/assets/app-icon.png`, shown by `AppIcon`) are cut from the
+  painted artwork in `spiderludo.png` by `scripts/gen-assets.js`, a
+  dependency-free script that decodes, resamples and encodes PNGs with Node's
+  own `zlib`. Replace that file and run `npm run assets` to regenerate them.
+- The launch screen is animated in JS (`src/screens/SplashScreen.tsx`): the
+  icon's scene - web, silver badge, three Spider pieces and a die - is built
+  from the in-app pieces and brought in one element at a time. The native
+  launch screens (`LaunchScreen.storyboard`, the Android window background and
+  the API 31+ system splash in `res/values-v31/`, whose icon is blank) show only
+  its first frame, the `#2E080B` backdrop, and iOS paints the React root view
+  the same colour, so the hand-off has no flash.
 
 ---
 
@@ -131,9 +142,11 @@ src/engine/                 pure game logic - no React, no I/O
 src/components/             board, pawn, dice, trays, sheets, UI primitives
 src/screens/                splash, menu, board
 src/state/storage.ts        AsyncStorage save/settings/career
-scripts/gen-assets.js       launcher icon + splash PNG generator
+scripts/gen-assets.js       app icon PNG generator (both platforms + in-app copy)
+scripts/sync-version.js     copies version.js into package.json + iOS xcconfig
 __tests__/                  engine, fairness, persistence and render tests
-android/                    Android project (this app is Android-only)
+android/                    Android project
+ios/                        iOS project (Debug + Release flavors, see below)
 ```
 
 The engine is deliberately pure and framework-free: it is exercised by hundreds
@@ -154,7 +167,7 @@ npm run android          # build + install the debug app
 npm test                 # engine, fairness, persistence and render tests
 npm run lint
 npm run typecheck
-npm run assets           # re-render launcher icons and splash artwork
+npm run assets           # re-render the app icons from spiderludo.png
 ```
 
 **Release signing.** `assembleRelease` falls back to the debug key so a release
@@ -172,11 +185,46 @@ R8/resource shrinking is wired up but left off (`enableProguardInReleaseBuilds`
 in `android/app/build.gradle`); turn it on once you have smoke-tested a minified
 release build on a device.
 
+### iOS
+
+Requirements: Xcode 16+, Ruby with Bundler, CocoaPods (installed via the
+`Gemfile`). Deployment target is iOS 15.1.
+
+```bash
+npm install
+npm run pods             # bundle install + pod install
+npm start                # Metro, in one terminal
+npm run ios              # debug flavor
+npm run ios:release      # release flavor
+```
+
+Open `ios/NiceLudo.xcworkspace` (not the `.xcodeproj`) in Xcode. There are two
+flavors, each with its own shared scheme, and they install side by side:
+
+| Scheme             | Configuration | Bundle ID            | Name on device  | JS source      |
+| ------------------ | ------------- | -------------------- | --------------- | -------------- |
+| `NiceLudo-Debug`   | Debug         | `com.niceludo.debug` | Spider Ludo Dev | Metro          |
+| `NiceLudo-Release` | Release       | `com.niceludo`       | Spider Ludo     | bundled in app |
+
+Per-flavor settings live in `ios/Config/Debug.xcconfig` and
+`ios/Config/Release.xcconfig`. Both include `ios/Config/Version.xcconfig`, which
+`npm run version:sync` generates from `version.js` (`version` becomes
+`MARKETING_VERSION`, `versionCode` becomes `CURRENT_PROJECT_VERSION`), so one
+bump covers both platforms.
+
+**Signing.** No team is committed. Pick your team under _Signing & Capabilities_
+in Xcode (automatic signing), or pass `DEVELOPMENT_TEAM=XXXXXXXXXX` to
+`xcodebuild`. `npm run build:ipa` produces an archive; export it from Xcode's
+Organizer or with `xcodebuild -exportArchive`.
+
 ---
 
 ## Offline by construction
 
-The release manifest requests exactly one permission — `VIBRATE`. There is no
+On iOS the app requests no permissions at all, and App Transport Security only
+allows local networking (for Metro in the debug flavor).
+
+The Android release manifest requests exactly one permission — `VIBRATE`. There is no
 `INTERNET` permission, no analytics, no ads, no account: the app cannot talk to
 a network even if it wanted to. `INTERNET` is added back only in the **debug**
 manifest so Metro can serve the JS bundle during development.

@@ -1,6 +1,7 @@
 import React, { memo } from 'react';
 import Svg, {
   Circle,
+  ClipPath,
   Defs,
   G,
   LinearGradient,
@@ -11,7 +12,9 @@ import Svg, {
 import {
   ALL_COLORS,
   BASE_ORIGIN,
+  CORNER_OF,
   ColorId,
+  Corner,
   GRID,
   HOME_COLUMN,
   START_INDEX,
@@ -19,8 +22,64 @@ import {
   TRACK,
   yardRect,
 } from '../engine';
-import { PLAYER_COLORS, colors } from '../theme/theme';
+import { PLAYER_COLORS, PieceTheme, colors } from '../theme/theme';
 import { useSvgId } from './svgId';
+import { webPath } from './web';
+
+/** Every colour on the board that is not a player colour. */
+interface BoardSkin {
+  faceA: string;
+  faceB: string;
+  cell: string;
+  cellEdge: string;
+  /** stands in for a player colour when that seat is empty */
+  muted: string;
+  mutedBase: string;
+  star: string;
+  arrow: string;
+  yard: string;
+  socket: string;
+  centreStroke: string;
+  emblem: string;
+  /** faint web drawn inside each yard */
+  yardWeb: boolean;
+}
+
+const LIGHT_SKIN: BoardSkin = {
+  faceA: '#FFFFFF',
+  faceB: '#F6E6E7',
+  cell: colors.boardCell,
+  cellEdge: colors.boardCellEdge,
+  muted: '#E4CDD0',
+  mutedBase: '#D6BABE',
+  star: '#B0646C',
+  arrow: '#FFFFFF',
+  yard: colors.boardCell,
+  socket: '#F7E9EA',
+  centreStroke: '#FFFFFF',
+  emblem: '#FFFFFF',
+  yardWeb: false,
+};
+
+/** Night-time board for the Spider theme: charcoal with a crimson cast. */
+const DARK_SKIN: BoardSkin = {
+  faceA: '#2B0E11',
+  faceB: '#140507',
+  cell: '#34151A',
+  cellEdge: '#5A242B',
+  muted: '#452026',
+  mutedBase: '#3A1A1F',
+  star: '#E0A6AB',
+  arrow: '#FFFFFF',
+  yard: '#1E0A0C',
+  socket: '#2E1215',
+  centreStroke: '#140507',
+  emblem: '#26090C',
+  yardWeb: true,
+};
+
+export const boardSkinFor = (theme: PieceTheme): BoardSkin =>
+  theme === 'spider' ? DARK_SKIN : LIGHT_SKIN;
 
 /** Frame thickness around the 15x15 playfield, in cell units. */
 const PAD = 0.62;
@@ -83,11 +142,12 @@ const arrowPath = (c: number, r: number, dx: number, dy: number): string => {
   } Z`;
 };
 
-const START_DIRECTION: Record<ColorId, [number, number]> = {
-  [ColorId.Red]: [1, 0],
-  [ColorId.Green]: [0, 1],
-  [ColorId.Yellow]: [-1, 0],
-  [ColorId.Blue]: [0, -1],
+/** Direction of travel out of each corner's start cell. */
+const START_DIRECTION: Record<Corner, [number, number]> = {
+  [Corner.TopLeft]: [1, 0],
+  [Corner.TopRight]: [0, 1],
+  [Corner.BottomRight]: [-1, 0],
+  [Corner.BottomLeft]: [0, -1],
 };
 
 export const BOARD_PAD = PAD;
@@ -108,10 +168,13 @@ export interface BoardProps {
   size: number;
   /** colours that are actually seated - the rest are drawn muted */
   seated: ColorId[];
+  /** the piece theme picks the matching board skin */
+  theme?: PieceTheme;
 }
 
-const BoardView = ({ size, seated }: BoardProps) => {
+const BoardView = ({ size, seated, theme = 'disc' }: BoardProps) => {
   const id = useSvgId('board');
+  const skin = boardSkinFor(theme);
   const seatedSet = new Set(seated);
 
   const cells: React.ReactElement[] = [];
@@ -124,11 +187,11 @@ const BoardView = ({ size, seated }: BoardProps) => {
       const start = startCellOwner(c, r);
       const key = `${c}-${r}`;
       const active = owner !== null ? seatedSet.has(owner) : true;
-      let fill: string = colors.boardCell;
+      let fill: string = skin.cell;
       if (owner !== null) {
-        fill = active ? PLAYER_COLORS[owner].base : '#C9CFE6';
+        fill = active ? PLAYER_COLORS[owner].base : skin.muted;
       } else if (start !== null) {
-        fill = seatedSet.has(start) ? PLAYER_COLORS[start].base : '#C9CFE6';
+        fill = seatedSet.has(start) ? PLAYER_COLORS[start].base : skin.muted;
       }
       cells.push(
         <Rect
@@ -139,7 +202,7 @@ const BoardView = ({ size, seated }: BoardProps) => {
           height={0.92}
           rx={0.16}
           fill={fill}
-          stroke={colors.boardCellEdge}
+          stroke={skin.cellEdge}
           strokeWidth={0.035}
         />,
       );
@@ -168,7 +231,7 @@ const BoardView = ({ size, seated }: BoardProps) => {
       <Path
         key={`star-${index}`}
         d={starPath(c + 0.5, r + 0.5, 0.3)}
-        fill="#7C87B8"
+        fill={skin.star}
         opacity={0.5}
       />
     );
@@ -177,12 +240,12 @@ const BoardView = ({ size, seated }: BoardProps) => {
   // Direction arrows on the start cells.
   const arrows = ALL_COLORS.filter(color => seatedSet.has(color)).map(color => {
     const [c, r] = TRACK[START_INDEX[color]];
-    const [dx, dy] = START_DIRECTION[color];
+    const [dx, dy] = START_DIRECTION[CORNER_OF[color]];
     return (
       <Path
         key={`arrow-${color}`}
         d={arrowPath(c, r, dx, dy)}
-        fill="#FFFFFF"
+        fill={skin.arrow}
         opacity={0.85}
       />
     );
@@ -201,7 +264,7 @@ const BoardView = ({ size, seated }: BoardProps) => {
           width={5.84}
           height={5.84}
           rx={0.7}
-          fill={seatedHere ? `url(#${id}-base${color})` : '#B9C0DA'}
+          fill={seatedHere ? `url(#${id}-base${color})` : skin.mutedBase}
         />
         <Rect
           x={ox + 0.08}
@@ -220,9 +283,22 @@ const BoardView = ({ size, seated }: BoardProps) => {
           width={yw}
           height={yh}
           rx={0.55}
-          fill={colors.boardCell}
+          fill={skin.yard}
           opacity={0.96}
         />
+        {skin.yardWeb ? (
+          <Path
+            d={webPath(yx + yw / 2, yy + yh / 2, Math.min(yw, yh) * 0.62, {
+              rings: 4,
+              spokeReach: 1.4,
+            })}
+            clipPath={`url(#${id}-yard${color})`}
+            fill="none"
+            stroke={seatedHere ? palette.base : skin.cellEdge}
+            strokeWidth={0.035}
+            opacity={0.45}
+          />
+        ) : null}
         <Rect
           x={yx + 0.16}
           y={yy + 0.16}
@@ -230,7 +306,7 @@ const BoardView = ({ size, seated }: BoardProps) => {
           height={yh - 0.32}
           rx={0.42}
           fill="none"
-          stroke={seatedHere ? palette.base : '#B9C0DA'}
+          stroke={seatedHere ? palette.base : skin.mutedBase}
           strokeWidth={0.07}
           opacity={0.5}
         />
@@ -243,8 +319,8 @@ const BoardView = ({ size, seated }: BoardProps) => {
               cx={cx}
               cy={cy}
               r={0.46}
-              fill="#EAEEFB"
-              stroke={seatedHere ? palette.base : '#B9C0DA'}
+              fill={skin.socket}
+              stroke={seatedHere ? palette.base : skin.mutedBase}
               strokeWidth={0.05}
               opacity={0.9}
             />
@@ -254,18 +330,23 @@ const BoardView = ({ size, seated }: BoardProps) => {
     );
   });
 
-  // Centre: four triangles meeting in the middle.
-  const centre = [
-    { color: ColorId.Green, d: 'M6,6 L9,6 L7.5,7.5 Z' },
-    { color: ColorId.Yellow, d: 'M9,6 L9,9 L7.5,7.5 Z' },
-    { color: ColorId.Blue, d: 'M9,9 L6,9 L7.5,7.5 Z' },
-    { color: ColorId.Red, d: 'M6,9 L6,6 L7.5,7.5 Z' },
-  ].map(({ color, d }) => (
+  // Centre: four triangles meeting in the middle, each on the side its
+  // colour's home column arrives from.
+  const TRIANGLE: Record<Corner, string> = {
+    [Corner.TopRight]: 'M6,6 L9,6 L7.5,7.5 Z', // top
+    [Corner.BottomRight]: 'M9,6 L9,9 L7.5,7.5 Z', // right
+    [Corner.BottomLeft]: 'M9,9 L6,9 L7.5,7.5 Z', // bottom
+    [Corner.TopLeft]: 'M6,9 L6,6 L7.5,7.5 Z', // left
+  };
+  const centre = ALL_COLORS.map(color => ({
+    color,
+    d: TRIANGLE[CORNER_OF[color]],
+  })).map(({ color, d }) => (
     <Path
       key={`centre-${color}`}
       d={d}
-      fill={seatedSet.has(color) ? PLAYER_COLORS[color].base : '#C9CFE6'}
-      stroke="#FFFFFF"
+      fill={seatedSet.has(color) ? PLAYER_COLORS[color].base : skin.muted}
+      stroke={skin.centreStroke}
       strokeWidth={0.05}
     />
   ));
@@ -282,14 +363,24 @@ const BoardView = ({ size, seated }: BoardProps) => {
           <Stop offset="100%" stopColor={colors.boardFrameB} />
         </LinearGradient>
         <LinearGradient id={`${id}-face`} x1="0" y1="0" x2="0.4" y2="1">
-          <Stop offset="0%" stopColor="#FFFFFF" />
-          <Stop offset="100%" stopColor="#E7ECFB" />
+          <Stop offset="0%" stopColor={skin.faceA} />
+          <Stop offset="100%" stopColor={skin.faceB} />
         </LinearGradient>
-        <LinearGradient id={`${id}-gold`} x1="0" y1="0" x2="1" y2="1">
-          <Stop offset="0%" stopColor={colors.goldLight} />
-          <Stop offset="45%" stopColor={colors.gold} />
-          <Stop offset="100%" stopColor={colors.goldDeep} />
+        <LinearGradient id={`${id}-silver`} x1="0" y1="0" x2="1" y2="1">
+          <Stop offset="0%" stopColor={colors.accentLight} />
+          <Stop offset="45%" stopColor={colors.accent} />
+          <Stop offset="100%" stopColor={colors.accentDeep} />
         </LinearGradient>
+        {skin.yardWeb
+          ? ALL_COLORS.map(color => {
+              const [yx, yy, yw, yh] = yardRect(color);
+              return (
+                <ClipPath key={`clip-${color}`} id={`${id}-yard${color}`}>
+                  <Rect x={yx} y={yy} width={yw} height={yh} rx={0.55} />
+                </ClipPath>
+              );
+            })
+          : null}
         {ALL_COLORS.map(color => (
           <LinearGradient
             key={`grad-${color}`}
@@ -322,7 +413,7 @@ const BoardView = ({ size, seated }: BoardProps) => {
         height={GRID + PAD * 2 - 0.24}
         rx={0.98}
         fill="none"
-        stroke={`url(#${id}-gold)`}
+        stroke={`url(#${id}-silver)`}
         strokeWidth={0.11}
         opacity={0.9}
       />
@@ -343,16 +434,16 @@ const BoardView = ({ size, seated }: BoardProps) => {
       {centre}
 
       {/* centre emblem */}
-      <Circle cx={7.5} cy={7.5} r={0.62} fill="#FFFFFF" opacity={0.92} />
+      <Circle cx={7.5} cy={7.5} r={0.62} fill={skin.emblem} opacity={0.92} />
       <Circle
         cx={7.5}
         cy={7.5}
         r={0.62}
         fill="none"
-        stroke={`url(#${id}-gold)`}
+        stroke={`url(#${id}-silver)`}
         strokeWidth={0.09}
       />
-      <Path d={starPath(7.5, 7.5, 0.44)} fill={`url(#${id}-gold)`} />
+      <Path d={starPath(7.5, 7.5, 0.44)} fill={`url(#${id}-silver)`} />
       {/* soft inner border so the playfield reads as inset */}
       <Rect
         x={-0.06}
@@ -361,7 +452,7 @@ const BoardView = ({ size, seated }: BoardProps) => {
         height={GRID + 0.12}
         rx={0.7}
         fill="none"
-        stroke="#0A0F26"
+        stroke={colors.boardFrameB}
         strokeWidth={0.08}
         opacity={0.25}
       />

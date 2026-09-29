@@ -49,28 +49,45 @@ export const PLAYER_COLORS: Record<ColorId, PieceColors> = {
   },
 };
 
+/**
+ * The Spider Ludo palette, taken from the app icon and the launch screen:
+ * deep crimson backgrounds, a bold red for the main actions and brushed
+ * silver (the icon's badge) for highlights.
+ */
 export const colors = {
-  bgDeep: '#070B1A',
-  bgMid: '#111a3d',
-  bgGlowA: '#2B2C7A',
-  bgGlowB: '#0E4C6B',
+  bgTop: '#3D0B10',
+  /** the launch backdrop - also the native launch screens' colour */
+  bgMid: '#2E080B',
+  bgDeep: '#140305',
+  background: '#140305',
+  bgGlowA: '#A3232C',
+  bgGlowB: '#6B1218',
+  bgGlowC: '#8A1F2A',
   surface: 'rgba(255,255,255,0.07)',
   surfaceStrong: 'rgba(255,255,255,0.12)',
-  surfaceSolid: '#161E3E',
-  border: 'rgba(255,255,255,0.14)',
-  borderStrong: 'rgba(255,255,255,0.28)',
-  text: '#F3F5FF',
-  textMuted: '#98A2CC',
-  textFaint: '#6E77A0',
-  gold: '#F6CF6A',
-  goldDeep: '#B8862A',
-  goldLight: '#FFF0BD',
-  danger: '#FF5C5C',
-  boardFrameA: '#1B2350',
-  boardFrameB: '#0C1130',
-  boardCell: '#F7F9FF',
-  boardCellEdge: '#C2CCEC',
-  boardInk: '#2A3358',
+  surfaceSolid: '#3A0D12',
+  sheet: '#2A070B',
+  scrim: 'rgba(14,2,4,0.76)',
+  border: 'rgba(255,220,220,0.14)',
+  borderStrong: 'rgba(255,220,220,0.28)',
+  text: '#FFF4F4',
+  textMuted: '#D2A9AC',
+  textFaint: '#94686C',
+  /** main actions: Start, Play, primary buttons */
+  primary: '#E3343C',
+  primaryDeep: '#8C1119',
+  onPrimary: '#FFFFFF',
+  /** brushed silver: selections, switches, the board's rim and star */
+  accent: '#E6E9EE',
+  accentDeep: '#9CA2AD',
+  accentLight: '#FFFFFF',
+  onAccent: '#2A0508',
+  danger: '#FF8A5C',
+  boardFrameA: '#4A0C12',
+  boardFrameB: '#1F0407',
+  boardCell: '#FFF8F7',
+  boardCellEdge: '#E8C9CB',
+  boardInk: '#4A1A1F',
   shadow: '#000000',
 } as const;
 
@@ -111,3 +128,14 @@ export const shadow = {
 } as const;
 
 export const colorOf = (color: ColorId): PieceColors => PLAYER_COLORS[color];
+
+/** How the pieces on the board are drawn. */
+export type PieceTheme = 'disc' | 'spider';
+
+export const PIECE_THEMES: Array<{ id: PieceTheme; label: string }> = [
+  { id: 'disc', label: 'Discs' },
+  { id: 'spider', label: 'Spider' },
+];
+
+export const isPieceTheme = (value: unknown): value is PieceTheme =>
+  PIECE_THEMES.some(theme => theme.id === value);

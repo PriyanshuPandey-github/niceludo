@@ -8,13 +8,14 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, StatusBar, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { GameState, SeatConfig, createGame } from './src/engine';
+import { GameMode, GameState, SeatConfig, createGame } from './src/engine';
 import {
   Career,
   DEFAULT_SETTINGS,
   EMPTY_CAREER,
   Settings,
   clearGame,
+  isOnline,
   loadCareer,
   loadGame,
   loadSettings,
@@ -26,8 +27,12 @@ import { colors } from './src/theme/theme';
 import { SplashScreen } from './src/screens/SplashScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { GameScreen } from './src/screens/GameScreen';
+import { AnimationLab } from './src/screens/AnimationLab';
+import { setSoundEnabled, warmUpSound } from './src/audio/sfx';
+import { setHapticsEnabled } from './src/audio/haptics';
+import { useIsOnline } from './src/state/network';
 
-type Route = 'splash' | 'home' | 'game';
+type Route = 'splash' | 'home' | 'game' | 'lab';
 
 const App = () => {
   const [route, setRoute] = useState<Route>('splash');
@@ -38,6 +43,18 @@ const App = () => {
   const [saved, setSaved] = useState<GameState | null>(null);
   const [game, setGame] = useState<GameState | null>(null);
   const [gameKey, setGameKey] = useState(0);
+  const online = useIsOnline();
+
+  useEffect(() => {
+    setSoundEnabled(settings.sound);
+    if (settings.sound) {
+      warmUpSound();
+    }
+  }, [settings.sound]);
+
+  useEffect(() => {
+    setHapticsEnabled(settings.vibrate);
+  }, [settings.vibrate]);
 
   const careerRef = useRef(career);
   careerRef.current = career;
@@ -73,7 +90,11 @@ const App = () => {
 
   /** Flush the in-memory game and career to disk (also used on background). */
   const flush = useCallback(() => {
-    if (liveGame.current && liveGame.current.phase !== 'over') {
+    if (
+      liveGame.current &&
+      liveGame.current.phase !== 'over' &&
+      !isOnline(liveGame.current)
+    ) {
       saveGame(liveGame.current);
     }
     saveCareer(careerRef.current);
@@ -94,11 +115,18 @@ const App = () => {
   }, []);
 
   const startGame = useCallback(
-    (seats: SeatConfig[]) => {
-      const fresh = createGame(seats, settings.difficulty);
+    (seats: SeatConfig[], mode: GameMode) => {
+      // "Online" opponents always play at full strength.
+      const difficulty = mode === 'online' ? 'hard' : settings.difficulty;
+      const fresh = createGame(seats, difficulty, undefined, mode);
       liveGame.current = fresh;
       setGame(fresh);
-      setSaved(fresh);
+      if (mode !== 'online') {
+        // an online match never takes the save slot (it can't be resumed),
+        // so whatever game was saved before stays resumable
+        setSaved(fresh);
+        saveGame(fresh);
+      }
       setGameKey(key => key + 1);
       setRoute('game');
       setCareer(current => {
@@ -106,7 +134,6 @@ const App = () => {
         saveCareer(next);
         return next;
       });
-      saveGame(fresh);
     },
     [settings.difficulty],
   );
@@ -129,8 +156,10 @@ const App = () => {
 
   const persistGame = useCallback((state: GameState) => {
     liveGame.current = state;
-    setSaved(state);
-    saveGame(state);
+    if (!isOnline(state)) {
+      setSaved(state);
+      saveGame(state);
+    }
   }, []);
 
   const tallyRoll = useCallback((face: number) => {
@@ -159,29 +188,40 @@ const App = () => {
       return next;
     });
     liveGame.current = null;
-    setSaved(null);
-    clearGame();
+    // the save slot holds some other game while an online match runs
+    if (!isOnline(state)) {
+      setSaved(null);
+      clearGame();
+    }
   }, []);
 
   const exitToMenu = useCallback(() => {
     flush();
+    if (liveGame.current && isOnline(liveGame.current)) {
+      // leaving an online match forfeits it
+      liveGame.current = null;
+    }
     setRoute('home');
   }, [flush]);
 
   const rematch = useCallback(() => {
     const current = liveGame.current ?? game;
-    if (!current) {
+    // an online rematch needs a connection; offline, head home instead
+    if (!current || (current.mode === 'online' && !online)) {
       setRoute('home');
       return;
     }
+    // same mode, same opponents (online ones keep their names and flags)
     startGame(
       current.players.map(seat => ({
         color: seat.color,
         type: seat.type,
         name: seat.name,
+        ...(seat.country ? { country: seat.country } : {}),
       })),
+      current.mode ?? 'cpu',
     );
-  }, [game, startGame]);
+  }, [game, online, startGame]);
 
   return (
     <SafeAreaProvider>
@@ -201,6 +241,14 @@ const App = () => {
             onStart={startGame}
             onResume={resumeGame}
             onDiscardSave={discardSave}
+            onOpenLab={() => setRoute('lab')}
+          />
+        ) : null}
+        {route === 'lab' ? (
+          <AnimationLab
+            settings={settings}
+            career={career}
+            onClose={() => setRoute('home')}
           />
         ) : null}
         {route === 'game' && game ? (

@@ -1,11 +1,48 @@
 import React from 'react';
-import { StyleSheet, Switch, Text, View } from 'react-native';
-import { DiceStats, Difficulty } from '../engine/types';
+import { Pressable, StyleSheet, Switch, Text, View } from 'react-native';
+import { ColorId, DiceStats, Difficulty } from '../engine/types';
 import { chiSquare } from '../engine/rng';
 import { Career, Settings } from '../state/storage';
-import { colors, radius } from '../theme/theme';
-import { Divider, SectionTitle, Segmented } from './ui';
+import { PIECE_THEMES, PieceTheme, colors, radius } from '../theme/theme';
+import { Button, Divider, SectionTitle, Segmented } from './ui';
 import { Sheet } from './Sheet';
+import { Pawn } from './Pawn';
+import { setHapticsEnabled, taps } from '../audio/haptics';
+
+/** Three tiles, each showing real pieces drawn in that theme. */
+const PieceThemePicker = ({
+  value,
+  onChange,
+}: {
+  value: PieceTheme;
+  onChange: (next: PieceTheme) => void;
+}) => (
+  <View style={styles.themeRow}>
+    {PIECE_THEMES.map(theme => {
+      const selected = theme.id === value;
+      return (
+        <Pressable
+          key={theme.id}
+          onPress={() => onChange(theme.id)}
+          accessibilityRole="button"
+          accessibilityState={{ selected }}
+          accessibilityLabel={`${theme.label} pieces`}
+          style={[styles.themeTile, selected && styles.themeTileSelected]}
+        >
+          <View style={styles.themePieces}>
+            <Pawn color={ColorId.Red} height={40} theme={theme.id} />
+            <Pawn color={ColorId.Blue} height={40} theme={theme.id} />
+          </View>
+          <Text
+            style={[styles.themeLabel, selected && styles.themeLabelSelected]}
+          >
+            {theme.label}
+          </Text>
+        </Pressable>
+      );
+    })}
+  </View>
+);
 
 const Row = ({
   label,
@@ -30,13 +67,22 @@ export const SettingsSheet = ({
   settings,
   onChange,
   onClose,
+  onTestAnimations,
 }: {
   visible: boolean;
   settings: Settings;
   onChange: (next: Settings) => void;
   onClose: () => void;
+  /** open the animation lab; the button is hidden when not given */
+  onTestAnimations?: () => void;
 }) => (
   <Sheet visible={visible} title="Settings" onClose={onClose}>
+    <SectionTitle>Pieces</SectionTitle>
+    <PieceThemePicker
+      value={settings.pieceTheme}
+      onChange={pieceTheme => onChange({ ...settings, pieceTheme })}
+    />
+    <Divider />
     <SectionTitle>CPU skill</SectionTitle>
     <Segmented<Difficulty>
       options={[
@@ -52,13 +98,35 @@ export const SettingsSheet = ({
       every player rolls from the same stream.
     </Text>
     <Divider />
-    <Row label="Vibration" hint="Short buzz on rolls and captures">
+    <Row label="Haptics" hint="Taps in time with rolls, moves and captures">
       <Switch
         value={settings.vibrate}
-        onValueChange={vibrate => onChange({ ...settings, vibrate })}
-        thumbColor={settings.vibrate ? colors.gold : '#8892BE'}
+        onValueChange={vibrate => {
+          onChange({ ...settings, vibrate });
+          // a double tap just after the switch's own click, to confirm
+          // the game's haptics work
+          if (vibrate) {
+            setHapticsEnabled(true);
+            taps([
+              ['impactMedium', 150],
+              ['impactHeavy', 300],
+            ]);
+          }
+        }}
+        thumbColor={settings.vibrate ? colors.accent : '#B58C90'}
         trackColor={{
-          true: 'rgba(246,207,106,0.4)',
+          true: 'rgba(230,233,238,0.42)',
+          false: 'rgba(255,255,255,0.2)',
+        }}
+      />
+    </Row>
+    <Row label="Sound effects" hint="Dice, webs, captures and fanfares">
+      <Switch
+        value={settings.sound}
+        onValueChange={sound => onChange({ ...settings, sound })}
+        thumbColor={settings.sound ? colors.accent : '#B58C90'}
+        trackColor={{
+          true: 'rgba(230,233,238,0.42)',
           false: 'rgba(255,255,255,0.2)',
         }}
       />
@@ -69,9 +137,9 @@ export const SettingsSheet = ({
         onValueChange={fastAnimations =>
           onChange({ ...settings, fastAnimations })
         }
-        thumbColor={settings.fastAnimations ? colors.gold : '#8892BE'}
+        thumbColor={settings.fastAnimations ? colors.accent : '#B58C90'}
         trackColor={{
-          true: 'rgba(246,207,106,0.4)',
+          true: 'rgba(230,233,238,0.42)',
           false: 'rgba(255,255,255,0.2)',
         }}
       />
@@ -85,9 +153,9 @@ export const SettingsSheet = ({
         onValueChange={autoMoveSingle =>
           onChange({ ...settings, autoMoveSingle })
         }
-        thumbColor={settings.autoMoveSingle ? colors.gold : '#8892BE'}
+        thumbColor={settings.autoMoveSingle ? colors.accent : '#B58C90'}
         trackColor={{
-          true: 'rgba(246,207,106,0.4)',
+          true: 'rgba(230,233,238,0.42)',
           false: 'rgba(255,255,255,0.2)',
         }}
       />
@@ -99,13 +167,25 @@ export const SettingsSheet = ({
       <Switch
         value={settings.showHints}
         onValueChange={showHints => onChange({ ...settings, showHints })}
-        thumbColor={settings.showHints ? colors.gold : '#8892BE'}
+        thumbColor={settings.showHints ? colors.accent : '#B58C90'}
         trackColor={{
-          true: 'rgba(246,207,106,0.4)',
+          true: 'rgba(230,233,238,0.42)',
           false: 'rgba(255,255,255,0.2)',
         }}
       />
     </Row>
+    {onTestAnimations ? (
+      <>
+        <Divider />
+        <Button
+          label="Test animations"
+          subtitle="Play every animation on a demo board"
+          variant="secondary"
+          compact
+          onPress={onTestAnimations}
+        />
+      </>
+    ) : null}
   </Sheet>
 );
 
@@ -202,16 +282,13 @@ export const FairnessSheet = ({
 }) => {
   const lifetimeTotal = career.faces.reduce((sum, count) => sum + count, 0);
   return (
-    <Sheet visible={visible} title="Fair dice" onClose={onClose}>
+    <Sheet visible={visible} title="Dice odds" onClose={onClose}>
       <Text style={styles.note}>
-        Every roll in this app comes from one shared generator (sfc32, seeded
-        per game). The generator cannot see the board, so it cannot favour a
-        player who is behind or throttle one who is ahead. Rolls are drawn with
-        rejection sampling, so all six faces are exactly equally likely - no
-        modulo bias, no "retention" nudges. Here are the real numbers.
+        Six faces, one chance each - for every player, on every roll. The dice
+        never see the board.
       </Text>
       <Divider />
-      <SectionTitle>All rolls on this device ({lifetimeTotal})</SectionTitle>
+      <SectionTitle>{`Every roll so far · ${lifetimeTotal}`}</SectionTitle>
       {[1, 2, 3, 4, 5, 6].map(face => (
         <Bar
           key={face}
@@ -228,7 +305,7 @@ export const FairnessSheet = ({
                 <SectionTitle>
                   {`${
                     playerNames?.[index] ?? `Seat ${index + 1}`
-                  } - this game (${total})`}
+                  } · this game · ${total}`}
                 </SectionTitle>
                 {[1, 2, 3, 4, 5, 6].map(face => (
                   <Bar
@@ -239,9 +316,9 @@ export const FairnessSheet = ({
                   />
                 ))}
                 <Text style={styles.chi}>
-                  {`chi-square ${chiSquare(stats, index).toFixed(
-                    2,
-                  )} (5 dof - under 11.07 is a normal, fair spread)`}
+                  {`Evenness ${chiSquare(stats, index).toFixed(
+                    1,
+                  )} · under 11 is pure chance`}
                 </Text>
               </View>
             );
@@ -261,6 +338,33 @@ const styles = StyleSheet.create({
   rowText: { flex: 1, paddingRight: 14 },
   rowLabel: { color: colors.text, fontSize: 16, fontWeight: '700' },
   rowHint: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
+  themeRow: { flexDirection: 'row', gap: 10 },
+  themeTile: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderRadius: radius.md,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  themeTileSelected: {
+    borderColor: colors.accent,
+    backgroundColor: 'rgba(230,233,238,0.1)',
+  },
+  themePieces: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    height: 44,
+    gap: 2,
+  },
+  themeLabel: {
+    color: colors.textMuted,
+    fontSize: 13,
+    fontWeight: '700',
+    marginTop: 8,
+  },
+  themeLabelSelected: { color: colors.text },
   note: {
     color: colors.textMuted,
     fontSize: 13,
@@ -272,7 +376,7 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: colors.gold,
+    backgroundColor: colors.accent,
     marginTop: 6,
     marginRight: 12,
   },
@@ -302,7 +406,7 @@ const styles = StyleSheet.create({
   barFill: {
     height: 12,
     borderRadius: radius.pill,
-    backgroundColor: colors.gold,
+    backgroundColor: colors.accent,
   },
   barTarget: {
     position: 'absolute',

@@ -5,6 +5,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Difficulty, GameState } from '../engine/types';
 import { SAVE_VERSION } from '../engine/rules';
+import { PieceTheme, isPieceTheme } from '../theme/theme';
 
 const SAVE_KEY = '@niceludo/save/v1';
 const SETTINGS_KEY = '@niceludo/settings/v1';
@@ -12,20 +13,26 @@ const CAREER_KEY = '@niceludo/career/v1';
 
 export interface Settings {
   vibrate: boolean;
+  /** synthesised sound effects */
+  sound: boolean;
   fastAnimations: boolean;
   /** auto-play the only legal move instead of asking for a tap */
   autoMoveSingle: boolean;
   /** show which pawns can move and which are in danger */
   showHints: boolean;
   difficulty: Difficulty;
+  /** look of the pieces: plain discs or Spider masked discs */
+  pieceTheme: PieceTheme;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   vibrate: true,
+  sound: true,
   fastAnimations: false,
   autoMoveSingle: true,
   showHints: true,
   difficulty: 'normal',
+  pieceTheme: 'spider',
 };
 
 export interface Career {
@@ -83,12 +90,15 @@ const looksLikeGame = (value: unknown): value is GameState => {
   );
 };
 
+/** Online matches are never saved or resumed - leaving one forfeits it. */
+export const isOnline = (state: GameState): boolean => state.mode === 'online';
+
 export const saveGame = (state: GameState): Promise<void> =>
-  writeJson(SAVE_KEY, state);
+  isOnline(state) ? Promise.resolve() : writeJson(SAVE_KEY, state);
 
 export const loadGame = async (): Promise<GameState | null> => {
   const state = await readJson<GameState>(SAVE_KEY);
-  if (!looksLikeGame(state) || state.phase === 'over') {
+  if (!looksLikeGame(state) || state.phase === 'over' || isOnline(state)) {
     return null;
   }
   // A save is always resumed at the start of a turn: whatever roll was in
@@ -106,7 +116,11 @@ export const clearGame = async (): Promise<void> => {
 
 export const loadSettings = async (): Promise<Settings> => {
   const stored = await readJson<Partial<Settings>>(SETTINGS_KEY);
-  return { ...DEFAULT_SETTINGS, ...(stored ?? {}) };
+  const merged = { ...DEFAULT_SETTINGS, ...(stored ?? {}) };
+  if (!isPieceTheme(merged.pieceTheme)) {
+    merged.pieceTheme = DEFAULT_SETTINGS.pieceTheme;
+  }
+  return merged;
 };
 
 export const saveSettings = (settings: Settings): Promise<void> =>

@@ -1,5 +1,6 @@
 import {
   ALL_COLORS,
+  ColorId,
   BASE_ORIGIN,
   FINISHED,
   HOME_COLUMN,
@@ -34,9 +35,30 @@ describe('board geometry', () => {
     });
   });
 
+  it('puts Yellow top-left, Blue top-right, Red bottom-right, Green bottom-left', () => {
+    expect(BASE_ORIGIN[ColorId.Yellow]).toEqual([0, 0]);
+    expect(BASE_ORIGIN[ColorId.Blue]).toEqual([9, 0]);
+    expect(BASE_ORIGIN[ColorId.Red]).toEqual([9, 9]);
+    expect(BASE_ORIGIN[ColorId.Green]).toEqual([0, 9]);
+  });
+
+  it("keeps each colour's start cell and home column beside its own yard", () => {
+    ALL_COLORS.forEach(color => {
+      const [ox, oy] = BASE_ORIGIN[color];
+      const near = ([c, r]: [number, number]) =>
+        c >= ox - 2 && c <= ox + 8 && r >= oy - 2 && r <= oy + 8;
+      expect(near(TRACK[START_INDEX[color]])).toBe(true);
+      // the home column's outer cell sits next to the start cell
+      const [hc, hr] = HOME_COLUMN[color][0];
+      const [sc, sr] = TRACK[START_INDEX[color]];
+      expect(Math.abs(hc - sc) + Math.abs(hr - sr)).toBe(1);
+    });
+  });
+
   it('spaces the four start cells 13 apart', () => {
+    // in turn order, so play passes clockwise round the board
     const starts = ALL_COLORS.map(color => START_INDEX[color]);
-    expect(starts).toEqual([1, 14, 27, 40]);
+    expect([...starts].sort((a, b) => a - b)).toEqual([1, 14, 27, 40]);
     starts.forEach((start, index) => {
       const next = starts[(index + 1) % 4];
       expect((next - start + 52) % 52).toBe(13);

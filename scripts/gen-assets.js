@@ -1,16 +1,14 @@
 #!/usr/bin/env node
 /**
- * Generates every raster asset the Android app needs - launcher icons
- * (legacy, round and adaptive foreground) plus the splash logo - straight
- * from the vector description below.
+ * Generates the app icons - Android launcher icons (legacy, round and
+ * adaptive foreground), the iOS app icons (release and debug flavors) and
+ * the copy the app itself shows - by cutting them from the painted artwork
+ * in `spiderludo.png`.
  *
- * It deliberately has zero dependencies: shapes are signed-distance fields,
- * anti-aliased analytically, and the PNG is encoded with Node's own zlib.
- * `npm run assets` re-renders everything, so the artwork is reproducible and
- * reviewable as code rather than as opaque binaries.
- *
- * The drawing mirrors `src/components/Logo.tsx`, so the launcher icon, the
- * splash screen and the in-app mark are the same design.
+ * It deliberately has zero dependencies: PNGs are decoded and encoded with
+ * Node's own zlib, resampled with an area filter, and masks are
+ * signed-distance shapes anti-aliased analytically. `npm run assets`
+ * re-renders everything.
  */
 const fs = require('fs');
 const path = require('path');
@@ -18,20 +16,8 @@ const zlib = require('zlib');
 
 // ---------------------------------------------------------------- palette
 const PALETTE = {
-  plateA: '#2A356B',
-  plateB: '#0D1230',
-  goldA: '#FFF0BD',
-  goldB: '#F6CF6A',
-  goldC: '#B8862A',
-  red: '#F0453C',
-  green: '#22BC69',
-  yellow: '#F5C02B',
-  blue: '#2C86F0',
   lane: '#F4F6FF',
-  dieA: '#FFFFFF',
-  dieB: '#D6DCF4',
-  dieEdge: '#8D97C4',
-  pip: '#20264A',
+  debug: '#FF7A1A',
 };
 
 const hexToRgb = hex => [
@@ -42,19 +28,6 @@ const hexToRgb = hex => [
 
 // ------------------------------------------------------------ sdf helpers
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
-
-const rotatePoint = (x, y, cx, cy, degrees) => {
-  if (!degrees) {
-    return [x, y];
-  }
-  const a = (-degrees * Math.PI) / 180;
-  const dx = x - cx;
-  const dy = y - cy;
-  return [
-    cx + dx * Math.cos(a) - dy * Math.sin(a),
-    cy + dx * Math.sin(a) + dy * Math.cos(a),
-  ];
-};
 
 /** Rounded rectangle signed distance (negative inside). */
 const sdRoundRect = (x, y, rx, ry, rw, rh, r) => {
@@ -73,23 +46,6 @@ const sdCircle = (x, y, cx, cy, r) => Math.hypot(x - cx, y - cy) - r;
 const solid = hex => {
   const rgb = hexToRgb(hex);
   return () => rgb;
-};
-
-/** Linear gradient between two colours along a unit vector in design space. */
-const gradient = (fromHex, toHex, x0, y0, x1, y1) => {
-  const from = hexToRgb(fromHex);
-  const to = hexToRgb(toHex);
-  const dx = x1 - x0;
-  const dy = y1 - y0;
-  const lengthSquared = dx * dx + dy * dy || 1;
-  return (x, y) => {
-    const t = clamp(((x - x0) * dx + (y - y0) * dy) / lengthSquared, 0, 1);
-    return [
-      from[0] + (to[0] - from[0]) * t,
-      from[1] + (to[1] - from[1]) * t,
-      from[2] + (to[2] - from[2]) * t,
-    ];
-  };
 };
 
 /**
@@ -133,15 +89,36 @@ class Canvas {
     }
   }
 
-  toPng() {
+  /** Keep only what lies inside a signed-distance shape (anti-aliased). */
+  mask(sdf) {
+    const { size, scale } = this;
+    for (let py = 0; py < size; py++) {
+      const y = (py + 0.5) / scale;
+      for (let px = 0; px < size; px++) {
+        const x = (px + 0.5) / scale;
+        const coverage = clamp(0.5 - sdf(x, y) * scale, 0, 1);
+        const index = (py * size + px) * 4;
+        for (let c = 0; c < 4; c++) {
+          this.data[index + c] *= coverage;
+        }
+      }
+    }
+  }
+
+  /**
+   * `opaque` drops the alpha channel entirely (colour type RGB), which the
+   * App Store requires for app icons.
+   */
+  toPng({ opaque = false } = {}) {
     const { size } = this;
-    const stride = size * 4;
+    const channels = opaque ? 3 : 4;
+    const stride = size * channels;
     const raw = Buffer.alloc((stride + 1) * size);
     for (let y = 0; y < size; y++) {
       raw[y * (stride + 1)] = 0; // filter: none
       for (let x = 0; x < size; x++) {
         const source = (y * size + x) * 4;
-        const target = y * (stride + 1) + 1 + x * 4;
+        const target = y * (stride + 1) + 1 + x * channels;
         const alpha = this.data[source + 3];
         // un-premultiply so the PNG stores straight alpha
         const factor = alpha > 0 ? 255 / alpha : 0;
@@ -156,10 +133,12 @@ class Canvas {
           0,
           255,
         );
-        raw[target + 3] = clamp(Math.round(alpha), 0, 255);
+        if (!opaque) {
+          raw[target + 3] = clamp(Math.round(alpha), 0, 255);
+        }
       }
     }
-    return encodePng(size, size, raw);
+    return encodePng(size, size, raw, opaque ? 2 : 6);
   }
 }
 
@@ -193,12 +172,12 @@ const chunk = (type, body) => {
   return Buffer.concat([length, typed, crc]);
 };
 
-const encodePng = (width, height, raw) => {
+const encodePng = (width, height, raw, colourType = 6) => {
   const header = Buffer.alloc(13);
   header.writeUInt32BE(width, 0);
   header.writeUInt32BE(height, 4);
   header[8] = 8; // bit depth
-  header[9] = 6; // colour type: RGBA
+  header[9] = colourType; // 6 = RGBA, 2 = RGB
   header[10] = 0;
   header[11] = 0;
   header[12] = 0;
@@ -210,146 +189,235 @@ const encodePng = (width, height, raw) => {
   ]);
 };
 
-// ------------------------------------------------------------- the artwork
-/** The board mark: four quadrants, white lanes, gold hub, and a die. */
-const drawMark = (canvas, options = {}) => {
-  const { clip = null, withRing = true } = options;
-  const opts = { clip };
+// ------------------------------------------------------------- app icon
+/** The launcher icon is painted artwork, not vector: this file. */
+const ICON_SOURCE = path.join(__dirname, '..', 'spiderludo.png');
+/**
+ * The artwork comes as a rounded tile on white; this is (a little more than)
+ * its corner radius as a fraction of its width.
+ */
+const ICON_CORNER = 0.155;
+/**
+ * Adaptive icons: the artwork fills 90 of the 108dp foreground layer, so the
+ * 72dp viewport crops into it and never reaches its edges.
+ */
+const FOREGROUND_ART = 90;
 
-  if (withRing) {
-    canvas.fill(
-      (x, y) => sdRoundRect(x, y, 18, 18, 164, 164, 38),
-      gradient(PALETTE.goldA, PALETTE.goldC, 18, 18, 182, 182),
-      opts,
-    );
-    canvas.fill(
-      (x, y) => sdRoundRect(x, y, 23, 23, 154, 154, 34),
-      gradient(PALETTE.plateA, PALETTE.plateB, 23, 23, 177, 177),
-      opts,
-    );
+/** Minimal PNG decoder for 8-bit, non-interlaced RGB or RGBA files. */
+const decodePng = file => {
+  const buffer = fs.readFileSync(file);
+  let offset = 8;
+  let header = null;
+  const idat = [];
+  while (offset < buffer.length) {
+    const length = buffer.readUInt32BE(offset);
+    const type = buffer.toString('ascii', offset + 4, offset + 8);
+    const body = buffer.subarray(offset + 8, offset + 8 + length);
+    if (type === 'IHDR') {
+      header = {
+        width: body.readUInt32BE(0),
+        height: body.readUInt32BE(4),
+        depth: body[8],
+        colourType: body[9],
+        interlace: body[12],
+      };
+    } else if (type === 'IDAT') {
+      idat.push(body);
+    }
+    offset += 12 + length;
   }
-
-  const quadrants = [
-    [36, 36, PALETTE.red],
-    [108, 36, PALETTE.green],
-    [108, 108, PALETTE.yellow],
-    [36, 108, PALETTE.blue],
-  ];
-  quadrants.forEach(([qx, qy, color]) => {
-    canvas.fill(
-      (x, y) => sdRoundRect(x, y, qx, qy, 56, 56, 8),
-      solid(color),
-      opts,
-    );
-  });
-
-  // white cross lanes
-  canvas.fill(
-    (x, y) => sdRoundRect(x, y, 92, 30, 16, 140, 5),
-    solid(PALETTE.lane),
-    opts,
-  );
-  canvas.fill(
-    (x, y) => sdRoundRect(x, y, 30, 92, 140, 16, 5),
-    solid(PALETTE.lane),
-    opts,
-  );
-
-  // gold hub
-  canvas.fill(
-    (x, y) => sdCircle(x, y, 100, 100, 17),
-    gradient(PALETTE.goldA, PALETTE.goldC, 84, 84, 117, 117),
-    opts,
-  );
-
-  // die, tilted, resting over the lower-right quadrant
-  const tilt = -14;
-  const spin = fn => (x, y) => {
-    const [rx, ry] = rotatePoint(x, y, 134, 138, tilt);
-    return fn(rx, ry);
-  };
-  canvas.fill(
-    spin((x, y) => sdRoundRect(x, y, 98, 102, 72, 72, 18)),
-    solid(PALETTE.dieEdge),
-    opts,
-  );
-  canvas.fill(
-    spin((x, y) => sdRoundRect(x, y, 101, 105, 66, 66, 16)),
-    gradient(PALETTE.dieA, PALETTE.dieB, 101, 105, 167, 171),
-    opts,
-  );
-  [
-    [118, 122],
-    [150, 122],
-    [134, 138],
-    [118, 154],
-    [150, 154],
-  ].forEach(([cx, cy]) => {
-    canvas.fill(
-      spin((x, y) => sdCircle(x, y, cx, cy, 6)),
-      solid(PALETTE.pip),
-      opts,
-    );
-  });
+  if (
+    !header ||
+    header.depth !== 8 ||
+    header.interlace !== 0 ||
+    ![2, 6].includes(header.colourType)
+  ) {
+    throw new Error(`${file}: expected an 8-bit, non-interlaced RGB(A) PNG`);
+  }
+  const { width, height } = header;
+  const bpp = header.colourType === 6 ? 4 : 3;
+  const stride = width * bpp;
+  const raw = zlib.inflateSync(Buffer.concat(idat));
+  const bytes = Buffer.alloc(stride * height);
+  for (let y = 0; y < height; y++) {
+    const filter = raw[y * (stride + 1)];
+    const row = y * (stride + 1) + 1;
+    for (let x = 0; x < stride; x++) {
+      const left = x >= bpp ? bytes[y * stride + x - bpp] : 0;
+      const up = y > 0 ? bytes[(y - 1) * stride + x] : 0;
+      const corner = x >= bpp && y > 0 ? bytes[(y - 1) * stride + x - bpp] : 0;
+      let value = raw[row + x];
+      if (filter === 1) {
+        value += left;
+      } else if (filter === 2) {
+        value += up;
+      } else if (filter === 3) {
+        value += (left + up) >> 1;
+      } else if (filter === 4) {
+        const p = left + up - corner;
+        const pa = Math.abs(p - left);
+        const pb = Math.abs(p - up);
+        const pc = Math.abs(p - corner);
+        value += pa <= pb && pa <= pc ? left : pb <= pc ? up : corner;
+      }
+      bytes[y * stride + x] = value & 0xff;
+    }
+  }
+  // premultiplied float RGBA, the same layout Canvas uses
+  const data = new Float64Array(width * height * 4);
+  for (let i = 0; i < width * height; i++) {
+    const alpha = bpp === 4 ? bytes[i * 4 + 3] : 255;
+    for (let c = 0; c < 3; c++) {
+      data[i * 4 + c] = (bytes[i * bpp + c] * alpha) / 255;
+    }
+    data[i * 4 + 3] = alpha;
+  }
+  return { width, height, data };
 };
 
 /**
- * Wraps a canvas so a drawing authored on the 200-unit grid can be placed
- * scaled and centred inside a different design space.
+ * Paints over the artwork's white corners by pulling colour radially in from
+ * just inside its rounded edge. The platform masks cut most of it away; this
+ * only guarantees no white or grey outline survives at the edge.
  */
-const scaledTarget = (canvas, scale, offset) => ({
-  fill(sdf, paint, options) {
-    canvas.fill(
-      (x, y) => sdf((x - offset) / scale, (y - offset) / scale) * scale,
-      (x, y) => paint((x - offset) / scale, (y - offset) / scale),
-      options,
-    );
-  },
-});
-
-/** Full-bleed launcher tile (legacy icons). */
-const renderLauncher = (pixels, round) => {
-  const canvas = new Canvas(pixels, 200);
-  const clip = round ? (x, y) => sdCircle(x, y, 100, 100, 98) : null;
-  canvas.fill(
-    round
-      ? (x, y) => sdCircle(x, y, 100, 100, 98)
-      : (x, y) => sdRoundRect(x, y, 2, 2, 196, 196, 44),
-    gradient(PALETTE.plateA, PALETTE.plateB, 10, 10, 190, 190),
-    {},
-  );
-  if (round) {
-    // Shrink the mark so its rounded-square ring stays inside the circle.
-    drawMark(scaledTarget(canvas, 0.78, 22), { clip });
-  } else {
-    drawMark(canvas, { clip });
+const fillCorners = image => {
+  const { width, data } = image;
+  const radius = width * ICON_CORNER;
+  const inner = radius * 0.92;
+  const centreOf = v =>
+    v < radius ? radius : v > width - radius ? width - radius : null;
+  for (let y = 0; y < width; y++) {
+    const cy = centreOf(y + 0.5);
+    if (cy === null) {
+      continue;
+    }
+    for (let x = 0; x < width; x++) {
+      const cx = centreOf(x + 0.5);
+      if (cx === null) {
+        continue;
+      }
+      const dx = x + 0.5 - cx;
+      const dy = y + 0.5 - cy;
+      const distance = Math.hypot(dx, dy);
+      if (distance <= inner) {
+        continue;
+      }
+      const sx = Math.floor(cx + (dx / distance) * inner);
+      const sy = Math.floor(cy + (dy / distance) * inner);
+      data.copyWithin(
+        (y * width + x) * 4,
+        (sy * width + sx) * 4,
+        (sy * width + sx) * 4 + 4,
+      );
+    }
   }
+  return image;
+};
+
+let iconArt = null;
+const loadIconArt = () =>
+  iconArt || (iconArt = fillCorners(decodePng(ICON_SOURCE)));
+
+/** For each output index, the source indices it covers and their weights. */
+const areaTaps = (from, to) => {
+  const ratio = from / to;
+  return Array.from({ length: to }, (_, i) => {
+    const start = i * ratio;
+    const end = start + ratio;
+    const taps = [];
+    for (let s = Math.floor(start); s < Math.min(from, Math.ceil(end)); s++) {
+      const weight = Math.min(end, s + 1) - Math.max(start, s);
+      if (weight > 0) {
+        taps.push([s, weight / ratio]);
+      }
+    }
+    return taps;
+  });
+};
+
+/** Area-average resample of a square image to `size` x `size`. */
+const resample = (image, size) => {
+  const { width, height, data } = image;
+  const columns = areaTaps(width, size);
+  const rows = areaTaps(height, size);
+  const wide = new Float64Array(size * height * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < size; x++) {
+      const target = (y * size + x) * 4;
+      for (const [sx, weight] of columns[x]) {
+        const source = (y * width + sx) * 4;
+        for (let c = 0; c < 4; c++) {
+          wide[target + c] += data[source + c] * weight;
+        }
+      }
+    }
+  }
+  const out = new Float64Array(size * size * 4);
+  for (let y = 0; y < size; y++) {
+    for (const [sy, weight] of rows[y]) {
+      for (let x = 0; x < size; x++) {
+        const target = (y * size + x) * 4;
+        const source = (sy * size + x) * 4;
+        for (let c = 0; c < 4; c++) {
+          out[target + c] += wide[source + c] * weight;
+        }
+      }
+    }
+  }
+  return out;
+};
+
+/** The artwork scaled to fill a canvas on the 200-unit grid. */
+const iconCanvas = pixels => {
+  const canvas = new Canvas(pixels, 200);
+  canvas.data = resample(loadIconArt(), pixels);
+  return canvas;
+};
+
+/** Legacy launcher icons: the tile's own rounded corners, or a circle. */
+const renderLauncher = (pixels, round) => {
+  const canvas = iconCanvas(pixels);
+  canvas.mask(
+    round
+      ? (x, y) => sdCircle(x, y, 100, 100, 100)
+      : (x, y) => sdRoundRect(x, y, 0, 0, 200, 200, 200 * ICON_CORNER),
+  );
   return canvas.toPng();
 };
 
 /**
- * Adaptive-icon foreground: the mark alone on a transparent 108dp canvas,
- * scaled so it stays inside the 72dp safe zone.
+ * Adaptive-icon foreground: the artwork centred on the 108dp layer; the
+ * background layer behind it is a matching red.
  */
 const renderForeground = pixels => {
   const canvas = new Canvas(pixels, 108);
-  // Draw the 200-unit mark into a 74-unit box centred on the 108 canvas.
-  const scale = 74 / 200;
-  const offset = (108 - 74) / 2;
-  drawMark(scaledTarget(canvas, scale, offset));
+  const art = Math.round((pixels * FOREGROUND_ART) / 108);
+  const offset = Math.round((pixels - art) / 2);
+  const scaled = resample(loadIconArt(), art);
+  for (let y = 0; y < art; y++) {
+    canvas.data.set(
+      scaled.subarray(y * art * 4, (y + 1) * art * 4),
+      ((y + offset) * pixels + offset) * 4,
+    );
+  }
   return canvas.toPng();
 };
 
-/** Splash mark: the launcher tile with a transparent surround. */
-const renderSplash = pixels => {
-  const canvas = new Canvas(pixels, 200);
-  canvas.fill(
-    (x, y) => sdRoundRect(x, y, 4, 4, 192, 192, 44),
-    gradient(PALETTE.plateA, PALETTE.plateB, 10, 10, 190, 190),
-    {},
-  );
-  drawMark(canvas);
-  return canvas.toPng();
+/**
+ * iOS app icon: the artwork full-bleed (iOS applies its own corner mask). The
+ * debug flavor adds an orange sash across the top-right corner so the two
+ * installs are easy to tell apart on the home screen.
+ */
+const renderIosIcon = (pixels, debug) => {
+  const canvas = iconCanvas(pixels);
+  if (debug) {
+    // Band of constant (x - y): a 45-degree strip cutting the corner.
+    const band = (centre, half) => (x, y) =>
+      (Math.abs(x - y - centre) - half) / Math.SQRT2;
+    canvas.fill(band(142, 20), solid(PALETTE.lane), {});
+    canvas.fill(band(142, 16), solid(PALETTE.debug), {});
+  }
+  return canvas.toPng({ opaque: true });
 };
 
 // ------------------------------------------------------------------ output
@@ -361,6 +429,20 @@ const DENSITIES = [
   ['xxhdpi', 3],
   ['xxxhdpi', 4],
 ];
+
+const XCASSETS = path.join(
+  __dirname,
+  '..',
+  'ios',
+  'NiceLudo',
+  'Images.xcassets',
+);
+
+/** The copy the app shows (home header, splash); RN rounds its corners. */
+const APP_ICON = path.join(__dirname, '..', 'src', 'assets', 'app-icon.png');
+
+const writeJson = (file, json) =>
+  write(file, Buffer.from(JSON.stringify(json, null, 2) + '\n'));
 
 const write = (file, buffer) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -389,13 +471,28 @@ const main = () => {
     );
   });
 
-  console.log('Rendering splash artwork...');
-  DENSITIES.forEach(([density, factor]) => {
-    write(
-      path.join(RES, `drawable-${density}`, 'splash_logo.png'),
-      renderSplash(Math.round(120 * factor)),
-    );
+  console.log('Rendering iOS app icons...');
+  [
+    ['AppIcon', false],
+    ['AppIcon-Debug', true],
+  ].forEach(([name, debug]) => {
+    const dir = path.join(XCASSETS, `${name}.appiconset`);
+    write(path.join(dir, 'icon-1024.png'), renderIosIcon(1024, debug));
+    writeJson(path.join(dir, 'Contents.json'), {
+      images: [
+        {
+          filename: 'icon-1024.png',
+          idiom: 'universal',
+          platform: 'ios',
+          size: '1024x1024',
+        },
+      ],
+      info: { author: 'xcode', version: 1 },
+    });
   });
+
+  console.log('Rendering the in-app icon...');
+  write(APP_ICON, iconCanvas(256).toPng({ opaque: true }));
 
   console.log('Done.');
 };

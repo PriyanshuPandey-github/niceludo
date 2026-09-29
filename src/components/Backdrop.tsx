@@ -1,17 +1,25 @@
 import React, { useEffect, useRef } from 'react';
-import { Animated, Easing, StyleSheet, View } from 'react-native';
+import {
+  Animated,
+  Easing,
+  StyleSheet,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 import Svg, {
   Defs,
   LinearGradient,
+  Path,
   RadialGradient,
   Rect,
   Stop,
 } from 'react-native-svg';
 import { colors } from '../theme/theme';
 import { useSvgId } from './svgId';
+import { webPath } from './web';
 
 /**
- * The app-wide background: a deep indigo gradient with two slow-drifting
+ * The app-wide background: a deep crimson gradient with two slow-drifting
  * light blooms and a vignette. Everything is transform/opacity driven so it
  * runs entirely on the native thread.
  */
@@ -88,17 +96,30 @@ const Bloom = ({
 
 export const Backdrop = ({ children }: { children?: React.ReactNode }) => {
   const sky = useSvgId('sky');
+  const { width, height } = useWindowDimensions();
   return (
     <View style={styles.root}>
       <Svg style={StyleSheet.absoluteFill} width="100%" height="100%">
         <Defs>
           <LinearGradient id={sky} x1="0" y1="0" x2="0.35" y2="1">
-            <Stop offset="0%" stopColor="#0A1030" />
+            <Stop offset="0%" stopColor={colors.bgTop} />
             <Stop offset="45%" stopColor={colors.bgMid} />
             <Stop offset="100%" stopColor={colors.bgDeep} />
           </LinearGradient>
         </Defs>
         <Rect x="0" y="0" width="100%" height="100%" fill={`url(#${sky})`} />
+        {/* the splash screen's web, faint and still */}
+        <Path
+          d={webPath(width / 2, height * 0.3, Math.max(width, height) * 0.55, {
+            spokes: 16,
+            rings: 6,
+            spokeReach: 1.25,
+          })}
+          stroke="#FF6B6B"
+          strokeOpacity={0.07}
+          strokeWidth={1.2}
+          fill="none"
+        />
       </Svg>
       <Bloom
         color={colors.bgGlowA}
@@ -115,7 +136,7 @@ export const Backdrop = ({ children }: { children?: React.ReactNode }) => {
         drift={22}
       />
       <Bloom
-        color="#6B2F86"
+        color={colors.bgGlowC}
         size={380}
         style={{ top: '38%', right: -160 }}
         delay={2400}

@@ -1,6 +1,7 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Animated,
+  LayoutChangeEvent,
   Pressable,
   StyleProp,
   StyleSheet,
@@ -13,7 +14,13 @@ import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import { colors, radius, shadow } from '../theme/theme';
 import { useSvgId } from './svgId';
 
-/** An absolutely-positioned linear gradient used as a background fill. */
+/**
+ * An absolutely-positioned linear gradient used as a background fill.
+ *
+ * The parent is measured and the SVG drawn at explicit pixel sizes: on iOS,
+ * react-native-svg resolves "100%" against the first layout pass and does not
+ * redraw when the parent settles, leaving the fill short and offset.
+ */
 export const GradientFill = ({
   from,
   to,
@@ -24,22 +31,45 @@ export const GradientFill = ({
   angle?: 'diagonal' | 'vertical' | 'horizontal';
 }) => {
   const id = useSvgId('fill');
+  const [size, setSize] = useState({ width: 0, height: 0 });
   const coords =
     angle === 'vertical'
       ? { x1: '0', y1: '0', x2: '0', y2: '1' }
       : angle === 'horizontal'
       ? { x1: '0', y1: '0', x2: '1', y2: '0' }
       : { x1: '0', y1: '0', x2: '1', y2: '1' };
+
+  const onLayout = (event: LayoutChangeEvent) => {
+    const { width, height } = event.nativeEvent.layout;
+    setSize(prev =>
+      prev.width === width && prev.height === height ? prev : { width, height },
+    );
+  };
+
   return (
-    <Svg style={StyleSheet.absoluteFill} width="100%" height="100%">
-      <Defs>
-        <LinearGradient id={id} {...coords}>
-          <Stop offset="0%" stopColor={from} />
-          <Stop offset="100%" stopColor={to} />
-        </LinearGradient>
-      </Defs>
-      <Rect x="0" y="0" width="100%" height="100%" fill={`url(#${id})`} />
-    </Svg>
+    <View
+      style={StyleSheet.absoluteFill}
+      onLayout={onLayout}
+      pointerEvents="none"
+    >
+      {size.width > 0 && size.height > 0 ? (
+        <Svg width={size.width} height={size.height}>
+          <Defs>
+            <LinearGradient id={id} {...coords}>
+              <Stop offset="0%" stopColor={from} />
+              <Stop offset="100%" stopColor={to} />
+            </LinearGradient>
+          </Defs>
+          <Rect
+            x="0"
+            y="0"
+            width={size.width}
+            height={size.height}
+            fill={`url(#${id})`}
+          />
+        </Svg>
+      ) : null}
+    </View>
   );
 };
 
@@ -94,13 +124,13 @@ export const Button = ({
         ]}
       >
         {isPrimary ? (
-          <GradientFill from={colors.gold} to={colors.goldDeep} />
+          <GradientFill from={colors.primary} to={colors.primaryDeep} />
         ) : null}
         <Text
           style={[
             styles.buttonLabel,
             compact && styles.buttonLabelCompact,
-            isPrimary ? styles.buttonLabelDark : styles.buttonLabelLight,
+            isPrimary ? styles.buttonLabelOnPrimary : styles.buttonLabelLight,
           ]}
         >
           {label}
@@ -109,7 +139,7 @@ export const Button = ({
           <Text
             style={[
               styles.buttonSubtitle,
-              isPrimary ? styles.subtitleDark : styles.subtitleLight,
+              isPrimary ? styles.subtitleOnPrimary : styles.subtitleLight,
             ]}
           >
             {subtitle}
@@ -183,19 +213,19 @@ export const Pill = ({
   tone = 'default',
 }: {
   label: string;
-  tone?: 'default' | 'gold' | 'danger';
+  tone?: 'default' | 'accent' | 'danger';
 }) => (
   <View
     style={[
       styles.pill,
-      tone === 'gold' && styles.pillGold,
+      tone === 'accent' && styles.pillAccent,
       tone === 'danger' && styles.pillDanger,
     ]}
   >
     <Text
       style={[
         styles.pillText,
-        tone === 'gold' && styles.pillTextGold,
+        tone === 'accent' && styles.pillTextAccent,
         tone === 'danger' && styles.pillTextDanger,
       ]}
     >
@@ -235,10 +265,10 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
   },
   buttonLabelCompact: { fontSize: 15 },
-  buttonLabelDark: { color: '#241703' },
+  buttonLabelOnPrimary: { color: colors.onPrimary },
   buttonLabelLight: { color: colors.text },
   buttonSubtitle: { fontSize: 12, marginTop: 2, fontWeight: '600' },
-  subtitleDark: { color: 'rgba(36,23,3,0.7)' },
+  subtitleOnPrimary: { color: 'rgba(255,255,255,0.75)' },
   subtitleLight: { color: colors.textMuted },
   card: {
     backgroundColor: colors.surface,
@@ -270,7 +300,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   segmentSelected: {
-    backgroundColor: colors.gold,
+    backgroundColor: colors.accent,
   },
   segmentLabel: {
     color: colors.textMuted,
@@ -278,7 +308,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     letterSpacing: 0.4,
   },
-  segmentLabelSelected: { color: '#241703' },
+  segmentLabelSelected: { color: colors.onAccent },
   divider: {
     height: 1,
     backgroundColor: colors.border,
@@ -290,14 +320,14 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     backgroundColor: colors.surfaceStrong,
   },
-  pillGold: { backgroundColor: 'rgba(246,207,106,0.18)' },
-  pillDanger: { backgroundColor: 'rgba(255,92,92,0.18)' },
+  pillAccent: { backgroundColor: 'rgba(230,233,238,0.16)' },
+  pillDanger: { backgroundColor: 'rgba(255,138,92,0.18)' },
   pillText: {
     color: colors.textMuted,
     fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.8,
   },
-  pillTextGold: { color: colors.gold },
+  pillTextAccent: { color: colors.accent },
   pillTextDanger: { color: colors.danger },
 });

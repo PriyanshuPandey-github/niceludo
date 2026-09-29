@@ -89,10 +89,10 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     justifyContent: 'flex-end',
-    backgroundColor: 'rgba(3,6,18,0.72)',
+    backgroundColor: colors.scrim,
   },
   sheet: {
-    backgroundColor: '#121A3A',
+    backgroundColor: colors.sheet,
     borderTopLeftRadius: radius.xl,
     borderTopRightRadius: radius.xl,
     borderWidth: 1,

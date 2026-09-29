@@ -102,6 +102,24 @@ describe('settings and career', () => {
     expect(loaded.showHints).toBe(DEFAULT_SETTINGS.showHints);
   });
 
+  it('keeps the chosen piece theme and drops unknown ones', async () => {
+    await saveSettings({ ...DEFAULT_SETTINGS, pieceTheme: 'disc' });
+    expect((await loadSettings()).pieceTheme).toBe('disc');
+
+    await AsyncStorage.setItem(
+      '@niceludo/settings/v1',
+      JSON.stringify({ ...DEFAULT_SETTINGS, pieceTheme: 'retired-theme' }),
+    );
+    expect((await loadSettings()).pieceTheme).toBe(DEFAULT_SETTINGS.pieceTheme);
+
+    // the retired standing-pawn theme falls back to the default
+    await AsyncStorage.setItem(
+      '@niceludo/settings/v1',
+      JSON.stringify({ ...DEFAULT_SETTINGS, pieceTheme: 'classic' }),
+    );
+    expect((await loadSettings()).pieceTheme).toBe('spider');
+  });
+
   it('keeps the lifetime dice tally', async () => {
     await saveCareer({
       gamesPlayed: 3,

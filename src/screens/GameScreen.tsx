@@ -6,44 +6,64 @@ import React, {
   useState,
 } from 'react';
 import {
+  AccessibilityInfo,
   Animated,
   BackHandler,
   Easing,
   Pressable,
   StyleSheet,
   Text,
-  Vibration,
   View,
   useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
+  ALL_COLORS,
+  CORNER_OF,
+  ColorId,
+  Corner,
   GameState,
   IN_BASE,
   Move,
   Point,
   applyMove,
   chooseMove,
-  dicePoint,
   isTokenInDanger,
+  legalMoves,
   roll,
   tokenPoint,
-  tokensHome,
 } from '../engine';
 import { Career, Settings } from '../state/storage';
-import { PLAYER_COLORS, colors, radius, shadow } from '../theme/theme';
+import { PLAYER_COLORS, colors, shadow } from '../theme/theme';
 import { Backdrop } from '../components/Backdrop';
-import { Board, boardPixel, boardUnit } from '../components/Board';
+import { BOARD_PAD, Board, boardPixel, boardUnit } from '../components/Board';
 import { DiceTray } from '../components/DiceTray';
-import { PAWN_ANCHOR_Y, PAWN_RATIO, Pawn } from '../components/Pawn';
+import { PIECE_GEOMETRY, Pawn } from '../components/Pawn';
 import { WinnerOverlay } from '../components/WinnerOverlay';
 import { Sheet } from '../components/Sheet';
 import { Button, Divider } from '../components/ui';
 import { FairnessSheet, RulesSheet, SettingsSheet } from '../components/sheets';
 import { layoutPawns, pawnKey } from '../components/pawnLayout';
+import { Mood } from '../components/eyes';
+import { sfx } from '../audio/sfx';
+import { haptics } from '../audio/haptics';
+import { flagOf } from '../state/online';
+import {
+  Swing,
+  SwingFx,
+  SwingPawn,
+  WebFx,
+  createSwing,
+  createYank,
+} from '../components/webSwing';
+import { Burst, BurstKind, HeroBurst, runBurst } from '../components/heroFx';
 
 const wait = (ms: number) =>
   new Promise<void>(resolve => setTimeout(resolve, ms));
+
+/** Let React commit newly bound animated styles before driving them. */
+const nextFrame = () =>
+  new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
 
 const run = (animation: Animated.CompositeAnimation) =>
   new Promise<void>(resolve => animation.start(() => resolve()));
@@ -58,6 +78,25 @@ export interface GameScreenProps {
   onExit: () => void;
   onRematch: () => void;
   onSettingsChange: (settings: Settings) => void;
+  /**
+   * Animation lab: no taps, no CPU turns, nothing saved or tallied. The lab
+   * drives the board through the handle it gets in `demo.api`.
+   */
+  demo?: { api: React.MutableRefObject<GameDemo | null> };
+}
+
+/** Scripted control of a demo board, for the animation lab. */
+export interface GameDemo {
+  /** jump straight to a board, with every piece snapped into place */
+  reset: (state: GameState) => void;
+  /** play the roll animation for the current seat, landing on `face` */
+  roll: (face: number) => Promise<void>;
+  /** move a token of the current seat by `die`; false if that isn't legal */
+  move: (token: number, die: number) => Promise<boolean>;
+  /** force every piece's eyes into one mood (null hands back control) */
+  setMood: (mood: Mood | null) => void;
+  /** the board as it stands */
+  current: () => GameState;
 }
 
 export const GameScreen = ({
@@ -70,7 +109,9 @@ export const GameScreen = ({
   onExit,
   onRematch,
   onSettingsChange,
+  demo,
 }: GameScreenProps) => {
+  const isDemo = !!demo;
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
 
@@ -83,32 +124,50 @@ export const GameScreen = ({
   const [lastFaces, setLastFaces] = useState<number[]>(() =>
     initial.players.map(() => 6),
   );
-  const [message, setMessage] = useState<string | null>(null);
+  /** Spider: pieces bound to a swing or yank, and the webs on screen */
+  const [swinging, setSwinging] = useState<Record<string, SwingPawn>>({});
+  const [webFxs, setWebFxs] = useState<SwingFx[]>([]);
+  /** Spider: capture and home-run bursts, and pieces in a web cocoon */
+  const [bursts, setBursts] = useState<Burst[]>([]);
+  const [webbed, setWebbed] = useState<Record<string, boolean>>({});
+  const burstId = useRef(0);
+  /** Spider: short-lived expressions (moving, happy, hurt) per pawn key */
+  const [moods, setMoods] = useState<Record<string, Mood>>({});
+  /** Animation lab: one mood for every piece, overriding the rest */
+  const [forcedMood, setForcedMood] = useState<Mood | null>(null);
+  const moodTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const [sheet, setSheet] = useState<
-    'none' | 'menu' | 'settings' | 'rules' | 'fair'
+    'none' | 'menu' | 'settings' | 'rules' | 'fair' | 'leave'
   >('none');
 
   const stateRef = useRef(state);
   stateRef.current = state;
   const busyRef = useRef(false);
-  const flickerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** resolves the roll in progress once its tray has finished tumbling */
+  const tumbleDone = useRef<(() => void) | null>(null);
   const mounted = useRef(true);
 
   const speed = settings.fastAnimations ? 0.62 : 1;
   const stepMs = Math.round(120 * speed);
   const rollMs = Math.round(760 * speed);
   const thinkMs = Math.round(620 * speed);
-
-  // Reserve room for the header pill and the player strip (which wraps onto a
-  // second row in a 4 player game), then keep the board square.
-  const boardSize = Math.max(
-    220,
-    Math.min(width - 20, height - insets.top - insets.bottom - 244),
+  // "Online" opponents take a human-looking, uneven time over each turn.
+  const online = state.mode === 'online';
+  const thinkFor = useCallback(
+    () =>
+      online ? Math.round(thinkMs * (0.9 + Math.random() * 1.6)) : thinkMs,
+    [online, thinkMs],
   );
+
+  // Full-width board with dice in rows above and below
+  const boardSize = Math.max(220, width - 8);
   const unit = boardUnit(boardSize);
-  const pawnHeight = unit * 1.34;
-  const pawnWidth = pawnHeight * PAWN_RATIO;
-  const traySize = unit * 2.25;
+  const traySize = Math.max(76, Math.min(boardSize * 0.22, 90));
+  const pieceTheme = settings.pieceTheme;
+  const geometry = PIECE_GEOMETRY[pieceTheme];
+  const pawnHeight = unit * geometry.cells;
+  const pawnWidth = pawnHeight * geometry.ratio;
+  const pawnAnchorY = geometry.anchorY;
 
   /** Board point -> top-left offset of a pawn view. */
   const toOffset = useCallback(
@@ -116,17 +175,25 @@ export const GameScreen = ({
       const pixel = boardPixel(boardSize, point);
       return {
         x: pixel.x - pawnWidth / 2,
-        y: pixel.y - pawnHeight * PAWN_ANCHOR_Y,
+        y: pixel.y - pawnHeight * pawnAnchorY,
       };
     },
-    [boardSize, pawnHeight, pawnWidth],
+    [boardSize, pawnHeight, pawnWidth, pawnAnchorY],
   );
 
   // One animated value per pawn, created once and reused for the whole game.
   const anims = useRef<
     Record<
       string,
-      { xy: Animated.ValueXY; lift: Animated.Value; scale: Animated.Value }
+      {
+        xy: Animated.ValueXY;
+        lift: Animated.Value;
+        scale: Animated.Value;
+        /** stomps, squashes and victory pulses, multiplied into scale */
+        pop: Animated.Value;
+        /** victory twirl, in degrees */
+        spin: Animated.Value;
+      }
     >
   >({});
   const ensureAnim = useCallback((key: string) => {
@@ -135,6 +202,8 @@ export const GameScreen = ({
         xy: new Animated.ValueXY({ x: 0, y: 0 }),
         lift: new Animated.Value(0),
         scale: new Animated.Value(1),
+        pop: new Animated.Value(1),
+        spin: new Animated.Value(0),
       };
     }
     return anims.current[key];
@@ -179,27 +248,37 @@ export const GameScreen = ({
     mounted.current = true;
     return () => {
       mounted.current = false;
-      if (flickerRef.current) {
-        clearInterval(flickerRef.current);
-      }
+      tumbleDone.current?.();
     };
   }, []);
 
-  const buzz = useCallback(
-    (ms: number) => {
-      if (settings.vibrate) {
-        Vibration.vibrate(ms);
-      }
-    },
-    [settings.vibrate],
-  );
-
-  const flash = useCallback(async (text: string, ms: number) => {
-    setMessage(text);
-    await wait(ms);
-    if (mounted.current) {
-      setMessage(null);
+  /** Set a pawn's expression; with `ms` it lapses back on its own. */
+  const setMood = useCallback((key: string, mood: Mood | null, ms?: number) => {
+    clearTimeout(moodTimers.current[key]);
+    const clear = () =>
+      setMoods(current => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+    if (mood === null) {
+      clear();
+      return;
     }
+    setMoods(current => ({ ...current, [key]: mood }));
+    if (ms) {
+      moodTimers.current[key] = setTimeout(clear, ms);
+    }
+  }, []);
+  useEffect(() => {
+    const timers = moodTimers.current;
+    return () => Object.values(timers).forEach(clearTimeout);
+  }, []);
+
+  /** Captures, home runs and finishes: announced, then a beat to take it in. */
+  const flash = useCallback(async (text: string, ms: number) => {
+    AccessibilityInfo.announceForAccessibility(text);
+    await wait(ms);
   }, []);
 
   /** Walk a pawn cell by cell, with a small hop on every step. */
@@ -208,6 +287,7 @@ export const GameScreen = ({
       const anim = ensureAnim(key);
       for (const point of points) {
         const offset = toOffset(point);
+        sfx.step();
         await run(
           Animated.parallel([
             Animated.timing(anim.xy, {
@@ -237,6 +317,247 @@ export const GameScreen = ({
     [ensureAnim, stepMs, toOffset],
   );
 
+  const bindSwing = useCallback((key: string, swing: Swing) => {
+    setSwinging(current => ({ ...current, [key]: swing.pawn }));
+    setWebFxs(current => [...current, swing.fx]);
+  }, []);
+  const unbindSwing = useCallback((key: string) => {
+    setSwinging(current => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }, []);
+  const dropWebFx = useCallback((fx: SwingFx) => {
+    if (mounted.current) {
+      setWebFxs(current => current.filter(item => item !== fx));
+    }
+  }, []);
+
+  /** Play a Spider burst at a board point; resolves when it has finished. */
+  const burst = useCallback(
+    (kind: BurstKind, point: Point, color: ColorId) => {
+      const pixel = boardPixel(boardSize, point);
+      const item: Burst = {
+        id: ++burstId.current,
+        kind,
+        x: pixel.x,
+        y: pixel.y,
+        unit,
+        palette: PLAYER_COLORS[color],
+        progress: new Animated.Value(0),
+      };
+      setBursts(current => [...current, item]);
+      return new Promise<void>(resolve =>
+        runBurst(item, speed).start(() => {
+          if (mounted.current) {
+            setBursts(current => current.filter(b => b !== item));
+          }
+          resolve();
+        }),
+      );
+    },
+    [boardSize, speed, unit],
+  );
+
+  /**
+   * Spider capture: the attacker stomps, a web splat bursts, the victims
+   * are cocooned and then yanked home by a thread from their own yard.
+   */
+  const webCapture = useCallback(
+    async (
+      attacker: string,
+      at: Point,
+      color: ColorId,
+      victims: Array<{ key: string; from: Point; to: Point; color: ColorId }>,
+    ) => {
+      const stomp = ensureAnim(attacker).pop;
+      Animated.sequence([
+        Animated.timing(stomp, {
+          toValue: 1.3,
+          duration: Math.round(110 * speed),
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(stomp, {
+          toValue: 0.84,
+          duration: Math.round(90 * speed),
+          easing: Easing.in(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.spring(stomp, {
+          toValue: 1,
+          friction: 4,
+          tension: 160,
+          useNativeDriver: true,
+        }),
+      ]).start();
+      burst('impact', at, color);
+      sfx.stomp();
+      sfx.splat(40);
+      await wait(200 * speed);
+
+      // cocooned: each victim flinches as the web wraps it
+      setWebbed(current => {
+        const next = { ...current };
+        victims.forEach(v => (next[v.key] = true));
+        return next;
+      });
+      victims.forEach(v =>
+        Animated.sequence([
+          Animated.timing(ensureAnim(v.key).pop, {
+            toValue: 0.78,
+            duration: Math.round(70 * speed),
+            useNativeDriver: true,
+          }),
+          Animated.spring(ensureAnim(v.key).pop, {
+            toValue: 1,
+            friction: 3,
+            tension: 200,
+            useNativeDriver: true,
+          }),
+        ]).start(),
+      );
+      sfx.wrap();
+      await wait(260 * speed);
+
+      const pawnOffset = { x: pawnWidth / 2, y: pawnHeight * pawnAnchorY };
+      const yanks = victims.map(v => ({
+        ...v,
+        yank: createYank({
+          from: boardPixel(boardSize, v.from),
+          to: boardPixel(boardSize, v.to),
+          unit,
+          pawnOffset,
+          baseScale: ensureAnim(v.key).scale,
+          palette: PLAYER_COLORS[v.color],
+        }),
+      }));
+      yanks.forEach(v => bindSwing(v.key, v.yank));
+      await nextFrame();
+      const time = yanks[0].yank.durations(speed);
+      sfx.thwip();
+      sfx.whoosh(time.travel, time.shoot + time.tug);
+      sfx.land(time.shoot + time.tug + time.travel);
+      await Promise.all(yanks.map(v => run(v.yank.shootAndPull(speed))));
+      setWebbed(current => {
+        const next = { ...current };
+        victims.forEach(v => delete next[v.key]);
+        return next;
+      });
+      await Promise.all(yanks.map(v => run(v.yank.release(speed))));
+      yanks.forEach(v => {
+        ensureAnim(v.key).xy.setValue(toOffset(v.to));
+        unbindSwing(v.key);
+        dropWebFx(v.yank.fx);
+      });
+    },
+    [
+      bindSwing,
+      boardSize,
+      burst,
+      dropWebFx,
+      ensureAnim,
+      pawnAnchorY,
+      pawnHeight,
+      pawnWidth,
+      speed,
+      toOffset,
+      unbindSwing,
+      unit,
+    ],
+  );
+
+  /** Spider home run: a web blooms from the centre and the piece twirls. */
+  const webHome = useCallback(
+    async (key: string, color: ColorId) => {
+      const anim = ensureAnim(key);
+      anim.spin.setValue(0);
+      const party = burst('home', { x: 7.5, y: 7.5 }, color);
+      await run(
+        Animated.parallel([
+          Animated.sequence([
+            Animated.timing(anim.lift, {
+              toValue: 2.4,
+              duration: Math.round(230 * speed),
+              easing: Easing.out(Easing.quad),
+              useNativeDriver: true,
+            }),
+            Animated.timing(anim.lift, {
+              toValue: 0,
+              duration: Math.round(420 * speed),
+              easing: Easing.bounce,
+              useNativeDriver: true,
+            }),
+          ]),
+          Animated.timing(anim.spin, {
+            toValue: 360,
+            duration: Math.round(560 * speed),
+            easing: Easing.inOut(Easing.cubic),
+            useNativeDriver: true,
+          }),
+          Animated.sequence([
+            Animated.timing(anim.pop, {
+              toValue: 1.5,
+              duration: Math.round(230 * speed),
+              easing: Easing.out(Easing.back(2)),
+              useNativeDriver: true,
+            }),
+            Animated.spring(anim.pop, {
+              toValue: 1,
+              friction: 4,
+              tension: 120,
+              useNativeDriver: true,
+            }),
+          ]),
+        ]),
+      );
+      anim.spin.setValue(0);
+      await party;
+    },
+    [burst, ensureAnim, speed],
+  );
+
+  /** Spider: two palms web the destination and reel the piece in. */
+  const webSwing = useCallback(
+    async (key: string, color: ColorId, start: Point, target: Point) => {
+      const anim = ensureAnim(key);
+      const swing = createSwing({
+        from: boardPixel(boardSize, start),
+        to: boardPixel(boardSize, target),
+        centre: boardPixel(boardSize, { x: 7.5, y: 7.5 }),
+        unit,
+        pawnOffset: { x: pawnWidth / 2, y: pawnHeight * pawnAnchorY },
+        baseScale: anim.scale,
+        palette: PLAYER_COLORS[color],
+      });
+      bindSwing(key, swing);
+      await nextFrame();
+      const time = swing.durations(speed);
+      sfx.thwip();
+      sfx.zip(time.travel, time.shoot + time.tug);
+      sfx.land(time.shoot + time.tug + time.travel);
+      await run(swing.shootAndPull(speed));
+      // Hand the piece back to its own animated position before unbinding.
+      anim.xy.setValue(toOffset(target));
+      unbindSwing(key);
+      swing.release(speed).start(() => dropWebFx(swing.fx));
+    },
+    [
+      bindSwing,
+      boardSize,
+      dropWebFx,
+      ensureAnim,
+      pawnAnchorY,
+      pawnHeight,
+      pawnWidth,
+      speed,
+      toOffset,
+      unbindSwing,
+      unit,
+    ],
+  );
+
   const performMove = useCallback(
     async (base: GameState, move: Move) => {
       const player = base.players[base.turn];
@@ -251,23 +572,74 @@ export const GameScreen = ({
           points.push(tokenPoint(color, step, move.token));
         }
       }
-      await walk(pawnKey(base.turn, move.token), points);
+      const key = pawnKey(base.turn, move.token);
+      setMood(key, 'moving');
+      if (move.leavesBase) {
+        sfx.pop();
+      }
+      if (pieceTheme === 'spider') {
+        await webSwing(
+          key,
+          color,
+          layoutPawns(base)[key].point,
+          points[points.length - 1],
+        );
+      } else {
+        await walk(key, points);
+      }
 
       const applied = applyMove(base, move);
       stateRef.current = applied.state;
       setState(applied.state);
+
+      move.captures.forEach(([victim, token]) =>
+        setMood(pawnKey(victim, token), 'hurt', 3000 * speed),
+      );
+      if (move.captures.length > 0 || move.finishes) {
+        setMood(key, 'happy', 2000 * speed);
+      } else {
+        setMood(key, null);
+      }
+
+      const hero = pieceTheme === 'spider';
+      if (hero && move.captures.length > 0) {
+        const before = layoutPawns(base);
+        const after = layoutPawns(applied.state);
+        await webCapture(
+          key,
+          points[points.length - 1],
+          color,
+          move.captures.map(([victim, token]) => {
+            const victimKey = pawnKey(victim, token);
+            return {
+              key: victimKey,
+              from: before[victimKey].point,
+              to: after[victimKey].point,
+              color: base.players[victim].color,
+            };
+          }),
+        );
+      }
+      if (!hero && move.captures.length > 0) {
+        sfx.stomp();
+        sfx.bonk(90);
+      }
+      if (move.finishes) {
+        sfx.home();
+      }
       syncPositions(applied.state, true);
+      const celebration =
+        hero && move.finishes ? webHome(key, color) : Promise.resolve();
 
       if (move.captures.length > 0) {
-        buzz(45);
         const names = move.captures
           .map(([victim]) => PLAYER_COLORS[base.players[victim].color].label)
           .join(', ');
         await flash(`${player.name} knocked out ${names}!`, 900 * speed);
       } else if (move.finishes) {
-        buzz(30);
         await flash(`${player.name} brought a pawn home!`, 800 * speed);
       }
+      await celebration;
 
       const ranked = applied.events.find(event => event.type === 'rank');
       if (ranked && ranked.type === 'rank') {
@@ -283,7 +655,50 @@ export const GameScreen = ({
         await flash('Extra roll!', 620 * speed);
       }
     },
-    [buzz, flash, speed, syncPositions, walk],
+    [
+      flash,
+      pieceTheme,
+      setMood,
+      speed,
+      syncPositions,
+      walk,
+      webCapture,
+      webHome,
+      webSwing,
+    ],
+  );
+
+  /**
+   * The roll animation alone: the die tumbles through random faces and
+   * lands on `face`. Returns false if the screen unmounted meanwhile.
+   */
+  const playRoll = useCallback(
+    async (face: number, turn: number) => {
+      // The tray plays the tumble - spin, rattle and face flips on one clock,
+      // started once it has rendered - and reports back when it has landed.
+      // Waiting on that (not a timer started here) keeps the result from
+      // arriving before the die has visibly stopped.
+      setDisplayFace(face);
+      setRolling(true);
+      await new Promise<void>(resolve => {
+        const fallback = setTimeout(resolve, rollMs + 1500);
+        tumbleDone.current = () => {
+          clearTimeout(fallback);
+          resolve();
+        };
+      });
+      tumbleDone.current = null;
+      if (!mounted.current) {
+        return false;
+      }
+      setDisplayFace(face);
+      setRolling(false);
+      setLastFaces(previous =>
+        previous.map((value, index) => (index === turn ? face : value)),
+      );
+      return true;
+    },
+    [rollMs],
   );
 
   const doRoll = useCallback(async () => {
@@ -293,29 +708,14 @@ export const GameScreen = ({
     }
     busyRef.current = true;
     setBusy(true);
-    setRolling(true);
-    buzz(12);
 
     const result = roll(current);
     const rolled = result.events.find(event => event.type === 'roll');
     const face = rolled && rolled.type === 'roll' ? rolled.die : 6;
 
-    flickerRef.current = setInterval(() => {
-      setDisplayFace(1 + Math.floor(Math.random() * 6));
-    }, 68);
-    await wait(rollMs);
-    if (flickerRef.current) {
-      clearInterval(flickerRef.current);
-      flickerRef.current = null;
-    }
-    if (!mounted.current) {
+    if (!(await playRoll(face, current.turn))) {
       return;
     }
-    setDisplayFace(face);
-    setRolling(false);
-    setLastFaces(previous =>
-      previous.map((value, index) => (index === current.turn ? face : value)),
-    );
     onRollTallied(face);
 
     stateRef.current = result.state;
@@ -327,6 +727,7 @@ export const GameScreen = ({
         forfeit && forfeit.type === 'forfeit' && forfeit.reason === 'threeSixes'
           ? 'Three sixes - turn passes on'
           : `No legal move with a ${face}`;
+      sfx.nope();
       await flash(reason, 950 * speed);
       busyRef.current = false;
       if (mounted.current) {
@@ -344,7 +745,7 @@ export const GameScreen = ({
       let move = result.moves[0];
       let nextState = result.state;
       if (player.type === 'cpu') {
-        await wait(thinkMs);
+        await wait(thinkFor());
         const choice = chooseMove(
           result.state,
           result.moves,
@@ -367,23 +768,75 @@ export const GameScreen = ({
     busyRef.current = false;
     setBusy(false);
   }, [
-    buzz,
     flash,
     onRollTallied,
     performMove,
-    rollMs,
+    playRoll,
     settings.autoMoveSingle,
     speed,
-    thinkMs,
+    thinkFor,
   ]);
+
+  // Animation lab: hand the lab a scripted remote for this board.
+  useEffect(() => {
+    if (!demo) {
+      return;
+    }
+    const busyWhile = async <T,>(work: () => Promise<T>) => {
+      busyRef.current = true;
+      setBusy(true);
+      try {
+        return await work();
+      } finally {
+        busyRef.current = false;
+        if (mounted.current) {
+          setBusy(false);
+        }
+      }
+    };
+    demo.api.current = {
+      reset: next => {
+        stateRef.current = next;
+        setState(next);
+        setMoves([]);
+        setMoods({});
+        setWebbed({});
+        syncPositions(next, false);
+      },
+      roll: face =>
+        busyWhile(() => playRoll(face, stateRef.current.turn)).then(() => {}),
+      move: (token, die) =>
+        busyWhile(async () => {
+          const base: GameState = {
+            ...stateRef.current,
+            die,
+            phase: 'select',
+          };
+          const move = legalMoves(base, die).find(m => m.token === token);
+          if (!move) {
+            return false;
+          }
+          stateRef.current = base;
+          await performMove(base, move);
+          return true;
+        }),
+      setMood: setForcedMood,
+      current: () => stateRef.current,
+    };
+    return () => {
+      demo.api.current = null;
+    };
+  }, [demo, performMove, playRoll, syncPositions]);
 
   // Drive the CPU, and report the final state once the game is decided.
   useEffect(() => {
     if (state.phase === 'over') {
-      onGameOver(state);
+      if (!isDemo) {
+        onGameOver(state);
+      }
       return;
     }
-    if (busy || state.phase !== 'roll') {
+    if (isDemo || busy || state.phase !== 'roll') {
       return;
     }
     const player = state.players[state.turn];
@@ -392,22 +845,31 @@ export const GameScreen = ({
     }
     const timer = setTimeout(() => {
       doRoll();
-    }, thinkMs);
+    }, thinkFor());
     return () => clearTimeout(timer);
-  }, [state, busy, doRoll, onGameOver, thinkMs]);
+  }, [state, busy, doRoll, isDemo, onGameOver, thinkFor]);
+
+  // Fanfare when the game is decided (the lab's demo wins too).
+  useEffect(() => {
+    if (state.phase === 'over') {
+      sfx.win();
+    }
+  }, [state.phase]);
 
   // Autosave whenever the board settles between turns.
   useEffect(() => {
-    if (!busy && state.phase !== 'over') {
+    if (!isDemo && !busy && state.phase !== 'over') {
       onPersist(state);
     }
-  }, [state, busy, onPersist]);
+  }, [state, busy, isDemo, onPersist]);
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener(
       'hardwareBackPress',
       () => {
-        if (sheet !== 'none') {
+        if (isDemo) {
+          onExit();
+        } else if (sheet !== 'none') {
           setSheet('none');
         } else {
           setSheet('menu');
@@ -416,11 +878,11 @@ export const GameScreen = ({
       },
     );
     return () => subscription.remove();
-  }, [sheet]);
+  }, [isDemo, onExit, sheet]);
 
   const player = state.players[state.turn];
   const humanTurn = player.type === 'human';
-  const canRoll = !busy && state.phase === 'roll' && humanTurn;
+  const canRoll = !isDemo && !busy && state.phase === 'roll' && humanTurn;
   const movableTokens = useMemo(
     () => new Set(moves.map(move => move.token)),
     [moves],
@@ -437,7 +899,7 @@ export const GameScreen = ({
       }
       busyRef.current = true;
       setBusy(true);
-      buzz(10);
+      haptics.select();
       performMove(stateRef.current, move).then(() => {
         busyRef.current = false;
         if (mounted.current) {
@@ -445,206 +907,203 @@ export const GameScreen = ({
         }
       });
     },
-    [buzz, moves, performMove],
+    [moves, performMove],
   );
-
-  const banner = message
-    ? message
-    : state.phase === 'over'
-    ? 'Game over'
-    : busy
-    ? `${player.name} is playing...`
-    : humanTurn
-    ? state.phase === 'select'
-      ? `You rolled ${state.die} - pick a pawn`
-      : 'Tap your dice to roll'
-    : `${player.name}'s turn`;
 
   const destinations = moves.map(move => {
     const point = tokenPoint(player.color, move.to, move.token);
     return { key: `${move.token}-${move.to}`, point };
   });
 
+  /** The colour whose yard is in `corner` - its tray sits beside it. */
+  const trayAt = (corner: Corner): ColorId =>
+    ALL_COLORS.find(color => CORNER_OF[color] === corner) ?? ColorId.Red;
+
+  const renderTray = (color: ColorId) => {
+    const playerIndex = state.players.findIndex(p => p.color === color);
+    if (playerIndex === -1) {
+      return <View style={{ width: traySize, height: traySize }} />;
+    }
+    const seat = state.players[playerIndex];
+    const active = playerIndex === state.turn && state.phase !== 'over';
+    return (
+      <View style={{ zIndex: active ? 30 : 5 }}>
+        <DiceTray
+          color={seat.color}
+          size={traySize}
+          face={active ? displayFace : lastFaces[playerIndex] ?? 6}
+          active={active}
+          rolling={active && rolling}
+          interactive={active && canRoll}
+          playerName={
+            seat.country ? `${flagOf(seat.country)} ${seat.name}` : seat.name
+          }
+          onPress={doRoll}
+          rollMs={rollMs}
+          onTumbleEnd={() => tumbleDone.current?.()}
+        />
+      </View>
+    );
+  };
+
   return (
     <Backdrop>
-      <View style={[styles.root, { paddingTop: insets.top + 6 }]}>
-        <View style={styles.header}>
-          <Pressable
-            onPress={() => setSheet('menu')}
-            hitSlop={12}
-            accessibilityRole="button"
-            accessibilityLabel="Game menu"
-            style={styles.iconButton}
-          >
-            <View style={styles.burgerLine} />
-            <View style={styles.burgerLine} />
-            <View style={styles.burgerLine} />
-          </Pressable>
+      <View
+        style={[
+          styles.root,
+          { paddingTop: insets.top + 6, paddingBottom: insets.bottom + 10 },
+        ]}
+      >
+        {/* Top UI Chrome */}
+        <View style={styles.topChrome}>
+          <View style={styles.header}>
+            <Pressable
+              onPress={() => setSheet('menu')}
+              disabled={isDemo}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel="Game menu"
+              // the lab draws its own close button in this spot
+              style={[styles.iconButton, isDemo && styles.hidden]}
+            >
+              <View style={styles.burgerLine} />
+              <View style={styles.burgerLine} />
+              <View style={styles.burgerLine} />
+            </Pressable>
+          </View>
+        </View>
+
+        {/* ── Game Area ── */}
+        <View style={styles.gameArea}>
+          <View style={[styles.diceRow, { width: boardSize }]}>
+            {renderTray(trayAt(Corner.TopLeft))}
+            {renderTray(trayAt(Corner.TopRight))}
+          </View>
 
           <View
             style={[
-              styles.turnPill,
-              { borderColor: `${PLAYER_COLORS[player.color].base}AA` },
+              styles.boardWrap,
+              {
+                width: boardSize,
+                height: boardSize,
+                elevation: 4,
+              },
             ]}
           >
-            <View
-              style={[
-                styles.turnDot,
-                { backgroundColor: PLAYER_COLORS[player.color].base },
-              ]}
+            <Board
+              size={boardSize}
+              seated={state.players.map(p => p.color)}
+              theme={pieceTheme}
             />
-            <Text style={styles.turnText} numberOfLines={1}>
-              {banner}
-            </Text>
-          </View>
 
-          <Pressable
-            onPress={() => setSheet('fair')}
-            hitSlop={12}
-            accessibilityRole="button"
-            accessibilityLabel="Dice fairness"
-            style={styles.iconButton}
-          >
-            <Text style={styles.iconGlyph}>⚄</Text>
-          </Pressable>
-        </View>
-
-        <View
-          style={[styles.boardWrap, { width: boardSize, height: boardSize }]}
-        >
-          <Board size={boardSize} seated={state.players.map(p => p.color)} />
-
-          {destinations.map(target => {
-            const pixel = boardPixel(boardSize, target.point);
-            return (
-              <View
-                key={target.key}
-                pointerEvents="none"
-                style={[
-                  styles.destination,
-                  {
-                    left: pixel.x - unit * 0.42,
-                    top: pixel.y - unit * 0.42,
-                    width: unit * 0.84,
-                    height: unit * 0.84,
-                    borderRadius: unit * 0.42,
-                    borderColor: PLAYER_COLORS[player.color].base,
-                  },
-                ]}
-              />
-            );
-          })}
-
-          {state.players.map((seat, playerIndex) =>
-            seat.tokens.map((steps, token) => {
-              const key = pawnKey(playerIndex, token);
-              const anim = ensureAnim(key);
-              const isCurrent = playerIndex === state.turn;
-              const movable =
-                isCurrent && humanTurn && movableTokens.has(token) && !busy;
-              const danger =
-                settings.showHints &&
-                seat.type === 'human' &&
-                isTokenInDanger(state, playerIndex, steps);
-              const lift = anim.lift.interpolate({
-                inputRange: [0, 1],
-                outputRange: [0, -unit * 0.42],
-              });
+            {destinations.map(target => {
+              const pixel = boardPixel(boardSize, target.point);
               return (
-                <Animated.View
-                  key={key}
+                <View
+                  key={target.key}
+                  pointerEvents="none"
                   style={[
-                    styles.pawn,
+                    styles.destination,
                     {
-                      width: pawnWidth,
-                      height: pawnHeight,
-                      zIndex: isCurrent ? 20 : 10,
-                      transform: [
-                        { translateX: anim.xy.x },
-                        { translateY: Animated.add(anim.xy.y, lift) },
-                        { scale: anim.scale },
-                      ],
+                      left: pixel.x - unit * 0.42,
+                      top: pixel.y - unit * 0.42,
+                      width: unit * 0.84,
+                      height: unit * 0.84,
+                      borderRadius: unit * 0.42,
+                      borderColor: PLAYER_COLORS[player.color].base,
                     },
                   ]}
-                >
-                  <Pressable
-                    onPress={() => onPawnPress(playerIndex, token)}
-                    disabled={!movable}
-                    hitSlop={6}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${seat.name} pawn ${token + 1}`}
-                  >
-                    <Pawn
-                      color={seat.color}
-                      height={pawnHeight}
-                      highlighted={movable && settings.showHints}
-                      threatened={danger}
-                    />
-                  </Pressable>
-                </Animated.View>
+                />
               );
-            }),
-          )}
+            })}
 
-          {state.players.map((seat, playerIndex) => {
-            const point = dicePoint(seat.color);
-            const pixel = boardPixel(boardSize, point);
-            const active = playerIndex === state.turn && state.phase !== 'over';
-            return (
-              <View
-                key={`tray-${seat.color}`}
-                style={[
-                  styles.tray,
-                  {
-                    left: pixel.x - traySize / 2,
-                    top: pixel.y - traySize / 2,
-                    zIndex: active ? 30 : 5,
-                  },
-                ]}
-              >
-                <DiceTray
-                  color={seat.color}
-                  size={traySize}
-                  face={active ? displayFace : lastFaces[playerIndex] ?? 6}
-                  active={active}
-                  rolling={active && rolling}
-                  interactive={active && canRoll}
-                  onPress={doRoll}
-                />
-              </View>
-            );
-          })}
-        </View>
+            {webFxs.map((fx, i) => (
+              <WebFx key={`web-${i}`} fx={fx} />
+            ))}
+            {bursts.map(item => (
+              <HeroBurst key={item.id} burst={item} />
+            ))}
 
-        <View style={[styles.footer, { paddingBottom: insets.bottom + 10 }]}>
-          {state.players.map((seat, index) => {
-            const active = index === state.turn && state.phase !== 'over';
-            return (
-              <View
-                key={seat.color}
-                style={[
-                  styles.playerChip,
-                  active && {
-                    borderColor: PLAYER_COLORS[seat.color].base,
-                    backgroundColor: `${PLAYER_COLORS[seat.color].base}22`,
-                  },
-                ]}
-              >
-                <View
-                  style={[
-                    styles.chipDot,
-                    { backgroundColor: PLAYER_COLORS[seat.color].base },
-                  ]}
-                />
-                <Text style={styles.chipName} numberOfLines={1}>
-                  {seat.name}
-                </Text>
-                <Text style={styles.chipMeta}>
-                  {seat.rank ? `#${seat.rank}` : `${tokensHome(seat)}/4`}
-                </Text>
-              </View>
-            );
-          })}
+            {state.players.map((seat, playerIndex) =>
+              seat.tokens.map((steps, token) => {
+                const key = pawnKey(playerIndex, token);
+                const anim = ensureAnim(key);
+                const isCurrent = playerIndex === state.turn;
+                const movable =
+                  isCurrent && humanTurn && movableTokens.has(token) && !busy;
+                const danger =
+                  settings.showHints &&
+                  seat.type === 'human' &&
+                  isTokenInDanger(state, playerIndex, steps);
+                const lift = anim.lift.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, -unit * 0.42],
+                });
+                const bound = swinging[key];
+                return (
+                  <Animated.View
+                    key={key}
+                    style={[
+                      styles.pawn,
+                      {
+                        width: pawnWidth,
+                        height: pawnHeight,
+                        // pieces in flight (swings, yanks) ride above the rest
+                        zIndex: bound ? 40 : isCurrent ? 20 : 10,
+                        transform: bound
+                          ? [
+                              { translateX: bound.translateX },
+                              { translateY: bound.translateY },
+                              { rotate: bound.rotate },
+                              { scale: bound.scale },
+                            ]
+                          : [
+                              { translateX: anim.xy.x },
+                              { translateY: Animated.add(anim.xy.y, lift) },
+                              {
+                                rotate: anim.spin.interpolate({
+                                  inputRange: [0, 360],
+                                  outputRange: ['0deg', '360deg'],
+                                }),
+                              },
+                              {
+                                scale: Animated.multiply(anim.scale, anim.pop),
+                              },
+                            ],
+                      },
+                    ]}
+                  >
+                    <Pressable
+                      onPress={() => onPawnPress(playerIndex, token)}
+                      disabled={!movable}
+                      hitSlop={6}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${seat.name} pawn ${token + 1}`}
+                    >
+                      <Pawn
+                        color={seat.color}
+                        height={pawnHeight}
+                        theme={pieceTheme}
+                        webbed={!!webbed[key]}
+                        mood={
+                          forcedMood ??
+                          moods[key] ??
+                          (danger ? 'danger' : movable ? 'ready' : 'idle')
+                        }
+                        highlighted={movable && settings.showHints}
+                        threatened={danger}
+                      />
+                    </Pressable>
+                  </Animated.View>
+                );
+              }),
+            )}
+          </View>
+
+          <View style={[styles.diceRow, { width: boardSize }]}>
+            {renderTray(trayAt(Corner.BottomLeft))}
+            {renderTray(trayAt(Corner.BottomRight))}
+          </View>
         </View>
       </View>
 
@@ -670,18 +1129,50 @@ export const GameScreen = ({
         />
         <View style={styles.menuGap} />
         <Button
-          label="Fair dice"
+          label="Dice odds"
           variant="secondary"
           compact
           onPress={() => setSheet('fair')}
         />
         <Divider />
+        {online ? (
+          // online matches are never saved, so leaving is final
+          <Button
+            label="Leave match"
+            variant="ghost"
+            compact
+            onPress={() => setSheet('leave')}
+          />
+        ) : (
+          <Button
+            label="Save and quit to menu"
+            variant="ghost"
+            compact
+            onPress={() => {
+              onPersist(stateRef.current);
+              setSheet('none');
+              onExit();
+            }}
+          />
+        )}
+      </Sheet>
+
+      <Sheet
+        visible={sheet === 'leave'}
+        title="Leave this match?"
+        onClose={() => setSheet('menu')}
+      >
+        <Text style={styles.leaveText}>
+          You will forfeit the match and it can't be resumed. The other players
+          will keep playing without you.
+        </Text>
+        <Button label="Keep playing" onPress={() => setSheet('none')} />
+        <View style={styles.menuGap} />
         <Button
-          label="Save and quit to menu"
+          label="Leave match"
           variant="ghost"
           compact
           onPress={() => {
-            onPersist(stateRef.current);
             setSheet('none');
             onExit();
           }}
@@ -709,6 +1200,7 @@ export const GameScreen = ({
       <WinnerOverlay
         visible={state.phase === 'over'}
         state={state}
+        pieceTheme={pieceTheme}
         onRematch={onRematch}
         onHome={onExit}
       />
@@ -717,80 +1209,56 @@ export const GameScreen = ({
 };
 
 const styles = StyleSheet.create({
-  root: { flex: 1, alignItems: 'center' },
+  leaveText: {
+    color: colors.textMuted,
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 18,
+  },
+  root: { flex: 1, backgroundColor: colors.background },
+  topChrome: { width: '100%', paddingHorizontal: 12 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    width: '100%',
-    paddingHorizontal: 14,
-    marginBottom: 10,
+    justifyContent: 'space-between',
+    paddingVertical: 8,
   },
+  gameArea: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  diceRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 4,
+    marginVertical: 12,
+  },
+  hidden: { opacity: 0 },
   iconButton: {
-    width: 42,
-    height: 42,
-    borderRadius: radius.md,
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 22,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   burgerLine: {
-    width: 16,
+    width: 18,
     height: 2,
-    borderRadius: 1,
     backgroundColor: colors.text,
-    marginVertical: 2,
+    marginVertical: 2.5,
+    borderRadius: 1,
   },
-  iconGlyph: { color: colors.text, fontSize: 20 },
-  turnPill: {
-    flex: 1,
-    marginHorizontal: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: radius.pill,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-  },
-  turnDot: { width: 10, height: 10, borderRadius: 5, marginRight: 8 },
-  turnText: { color: colors.text, fontSize: 13.5, fontWeight: '700', flex: 1 },
   boardWrap: { position: 'relative', ...shadow.card },
   pawn: { position: 'absolute', left: 0, top: 0 },
-  tray: { position: 'absolute' },
   destination: {
     position: 'absolute',
     borderWidth: 2.5,
     opacity: 0.85,
     zIndex: 15,
-  },
-  footer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    paddingHorizontal: 12,
-    paddingTop: 14,
-  },
-  playerChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    margin: 4,
-    borderRadius: radius.pill,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    minWidth: 88,
-  },
-  chipDot: { width: 10, height: 10, borderRadius: 5, marginRight: 8 },
-  chipName: { color: colors.text, fontSize: 12.5, fontWeight: '700', flex: 1 },
-  chipMeta: {
-    color: colors.textMuted,
-    fontSize: 11,
-    fontWeight: '800',
-    marginLeft: 6,
   },
   menuGap: { height: 10 },
 });

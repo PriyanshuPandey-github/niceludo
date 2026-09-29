@@ -26,10 +26,19 @@ export type SeatType = 'human' | 'cpu';
 /** Difficulty only changes how well the CPU *chooses* a move - never the dice. */
 export type Difficulty = 'easy' | 'normal' | 'hard';
 
+/**
+ * How a game was set up: against the CPU, pass-and-play on one device, or
+ * "online" - CPU opponents on hard, presented as matched players with names
+ * and countries. Everything still runs on the device.
+ */
+export type GameMode = 'cpu' | 'local' | 'online';
+
 export interface SeatConfig {
   color: ColorId;
   type: SeatType;
   name: string;
+  /** ISO 3166 country code shown as a flag (online opponents) */
+  country?: string;
 }
 
 /**
@@ -47,6 +56,8 @@ export interface PlayerState {
   color: ColorId;
   type: SeatType;
   name: string;
+  /** ISO 3166 country code shown as a flag (online opponents) */
+  country?: string;
   /** steps value for each of the four tokens */
   tokens: number[];
   /** finishing position (1 = winner); null while still playing */
@@ -83,6 +94,8 @@ export interface GameState {
   rng: RngState;
   stats: DiceStats;
   difficulty: Difficulty;
+  /** absent in saves from before modes existed, which were all 'cpu' */
+  mode?: GameMode;
   turnCount: number;
   startedAt: number;
   updatedAt: number;

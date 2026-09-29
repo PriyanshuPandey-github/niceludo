@@ -67,13 +67,40 @@ export const TRACK: Array<[number, number]> = (() => {
 
 export const TRACK_LENGTH = TRACK.length; // 52
 
-/** Ring index of each colour's start cell. */
-export const START_INDEX: Record<ColorId, number> = {
-  [ColorId.Red]: 1,
-  [ColorId.Green]: 14,
-  [ColorId.Yellow]: 27,
-  [ColorId.Blue]: 40,
+/**
+ * The board's four corners, clockwise from the top-left. Each corner owns a
+ * yard, a start cell and a home column; which colour sits where is decided
+ * by CORNER_OF alone, so recolouring the board is a one-line change.
+ */
+export enum Corner {
+  TopLeft = 0,
+  TopRight = 1,
+  BottomRight = 2,
+  BottomLeft = 3,
+}
+
+/** Where each colour sits. Clockwise from top-left: Yellow, Blue, Red, Green. */
+export const CORNER_OF: Record<ColorId, Corner> = {
+  [ColorId.Yellow]: Corner.TopLeft,
+  [ColorId.Blue]: Corner.TopRight,
+  [ColorId.Red]: Corner.BottomRight,
+  [ColorId.Green]: Corner.BottomLeft,
 };
+
+const byCorner = <T>(table: Record<Corner, T>): Record<ColorId, T> => ({
+  [ColorId.Red]: table[CORNER_OF[ColorId.Red]],
+  [ColorId.Green]: table[CORNER_OF[ColorId.Green]],
+  [ColorId.Yellow]: table[CORNER_OF[ColorId.Yellow]],
+  [ColorId.Blue]: table[CORNER_OF[ColorId.Blue]],
+});
+
+/** Ring index of each colour's start cell. */
+export const START_INDEX: Record<ColorId, number> = byCorner({
+  [Corner.TopLeft]: 1,
+  [Corner.TopRight]: 14,
+  [Corner.BottomRight]: 27,
+  [Corner.BottomLeft]: 40,
+});
 
 /**
  * Protected cells: the four coloured start cells plus the four star cells
@@ -86,44 +113,44 @@ export const isSafeCell = (index: number): boolean => SAFE_SET.has(index);
 export const STAR_CELLS: number[] = [9, 22, 35, 48];
 
 /** The five private cells leading to the centre, ordered outward-to-inward. */
-export const HOME_COLUMN: Record<ColorId, Array<[number, number]>> = {
-  [ColorId.Red]: [
+export const HOME_COLUMN: Record<ColorId, Array<[number, number]>> = byCorner({
+  [Corner.TopLeft]: [
     [1, 7],
     [2, 7],
     [3, 7],
     [4, 7],
     [5, 7],
   ],
-  [ColorId.Green]: [
+  [Corner.TopRight]: [
     [7, 1],
     [7, 2],
     [7, 3],
     [7, 4],
     [7, 5],
   ],
-  [ColorId.Yellow]: [
+  [Corner.BottomRight]: [
     [13, 7],
     [12, 7],
     [11, 7],
     [10, 7],
     [9, 7],
   ],
-  [ColorId.Blue]: [
+  [Corner.BottomLeft]: [
     [7, 13],
     [7, 12],
     [7, 11],
     [7, 10],
     [7, 9],
   ],
-};
+});
 
 /** Top-left corner of each 6x6 base quadrant. */
-export const BASE_ORIGIN: Record<ColorId, [number, number]> = {
-  [ColorId.Red]: [0, 0],
-  [ColorId.Green]: [9, 0],
-  [ColorId.Yellow]: [9, 9],
-  [ColorId.Blue]: [0, 9],
-};
+export const BASE_ORIGIN: Record<ColorId, [number, number]> = byCorner({
+  [Corner.TopLeft]: [0, 0],
+  [Corner.TopRight]: [9, 0],
+  [Corner.BottomRight]: [9, 9],
+  [Corner.BottomLeft]: [0, 9],
+});
 
 /** Inner yard rectangle of a base, in cell units: [x, y, w, h]. */
 export const yardRect = (color: ColorId): [number, number, number, number] => {
@@ -139,21 +166,28 @@ export const baseSlot = (color: ColorId, token: number): Point => {
   return { x: x + dx, y: y + dy };
 };
 
-/** Centre of the yard - where that colour's dice tray lives. */
-export const dicePoint = (color: ColorId): Point => {
-  const [x, y, w, h] = yardRect(color);
-  return { x: x + w / 2, y: y + h / 2 };
-};
+/**
+ * Corner position for each colour's dice tray (Ludo King style).
+ * These sit just outside the playing grid, at each board corner.
+ * The coordinate is the centre of where the dice box should be placed.
+ */
+const DICE_POINT: Record<ColorId, Point> = byCorner({
+  [Corner.TopLeft]: { x: -0.1, y: -0.1 },
+  [Corner.TopRight]: { x: GRID + 0.1, y: -0.1 },
+  [Corner.BottomRight]: { x: GRID + 0.1, y: GRID + 0.1 },
+  [Corner.BottomLeft]: { x: -0.1, y: GRID + 0.1 },
+});
+export const dicePoint = (color: ColorId): Point => DICE_POINT[color];
 
 export const CENTRE: Point = { x: 7.5, y: 7.5 };
 
 /** Unit vector pointing from the centre towards a colour's home column. */
-const HOME_DIR: Record<ColorId, Point> = {
-  [ColorId.Red]: { x: -1, y: 0 },
-  [ColorId.Green]: { x: 0, y: -1 },
-  [ColorId.Yellow]: { x: 1, y: 0 },
-  [ColorId.Blue]: { x: 0, y: 1 },
-};
+const HOME_DIR: Record<ColorId, Point> = byCorner({
+  [Corner.TopLeft]: { x: -1, y: 0 },
+  [Corner.TopRight]: { x: 0, y: -1 },
+  [Corner.BottomRight]: { x: 1, y: 0 },
+  [Corner.BottomLeft]: { x: 0, y: 1 },
+});
 
 /** Where a finished token rests inside the centre triangle. */
 export const finishedSlot = (color: ColorId, token: number): Point => {

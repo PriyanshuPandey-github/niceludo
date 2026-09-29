@@ -1,24 +1,33 @@
 {
   "name": "niceludo",
-  "version": "1.0.0",
+  "version": "1.0.4",
   "private": true,
-  "description": "NiceLudo - a premium, offline, provably-fair Ludo board game for Android (React Native CLI).",
+  "description": "NiceLudo - a premium, offline, provably-fair Ludo board game for Android and iOS (React Native CLI).",
   "scripts": {
+    "postinstall": "patch-package",
     "android": "react-native run-android",
     "android:release": "react-native run-android --mode release",
+    "ios": "npm run version:sync && react-native run-ios --scheme NiceLudo-Debug --mode Debug",
+    "ios:release": "npm run version:sync && react-native run-ios --scheme NiceLudo-Release --mode Release",
     "start": "react-native start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "jest",
     "assets": "node scripts/gen-assets.js",
     "clean:android": "cd android && ./gradlew clean",
-    "build:apk": "cd android && ./gradlew assembleRelease",
-    "build:aab": "cd android && ./gradlew bundleRelease"
+    "pods": "npm run version:sync && cd ios && bundle exec pod install",
+    "version:sync": "node scripts/sync-version.js",
+    "build:apk": "npm run version:sync && cd android && ./gradlew assembleRelease",
+    "build:aab": "npm run version:sync && cd android && ./gradlew bundleRelease",
+    "build:ipa": "npm run version:sync && cd ios && xcodebuild -workspace NiceLudo.xcworkspace -scheme NiceLudo-Release -configuration Release -destination generic/platform=iOS -archivePath build/NiceLudo.xcarchive archive"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.2.0",
+    "@react-native-community/netinfo": "12.0.1",
     "react": "19.2.3",
     "react-native": "0.87.0",
+    "react-native-audio-api": "0.13.6",
+    "react-native-haptic-feedback": "3.0.0",
     "react-native-safe-area-context": "^5.5.2",
     "react-native-svg": "^15.15.5"
   },
@@ -28,6 +37,7 @@
     "@babel/runtime": "^7.25.0",
     "@react-native-community/cli": "20.2.0",
     "@react-native-community/cli-platform-android": "20.2.0",
+    "@react-native-community/cli-platform-ios": "20.2.0",
     "@react-native/babel-preset": "0.87.0",
     "@react-native/eslint-config": "0.87.0",
     "@react-native/jest-preset": "0.87.0",
@@ -38,6 +48,7 @@
     "@types/react-test-renderer": "^19.1.0",
     "eslint": "^8.19.0",
     "jest": "^29.6.3",
+    "patch-package": "^8.0.1",
     "prettier": "2.8.8",
     "react-test-renderer": "19.2.3",
     "typescript": "^6.0.3"

@@ -10,6 +10,7 @@ import {
   createGame,
   legalMoves,
   ringIndex,
+  START_INDEX,
   roll,
   standings,
 } from '../src/engine';
@@ -84,7 +85,7 @@ describe('movement rules', () => {
     // Red 4 steps along, Yellow parked where Red will land (a non-safe cell).
     state = placeToken(state, 0, 0, 4);
     const target = ringIndex(ColorId.Red, 7);
-    const yellowSteps = (target - 27 + 52) % 52;
+    const yellowSteps = (target - START_INDEX[ColorId.Yellow] + 52) % 52;
     state = placeToken(state, 1, 2, yellowSteps);
     state = withDie(state, 3);
 
@@ -103,7 +104,7 @@ describe('movement rules', () => {
     // Red lands exactly on the star cell 8 steps past its own start.
     state = placeToken(state, 0, 0, 5);
     const star = ringIndex(ColorId.Red, 8);
-    const yellowSteps = (star - 27 + 52) % 52;
+    const yellowSteps = (star - START_INDEX[ColorId.Yellow] + 52) % 52;
     state = placeToken(state, 1, 1, yellowSteps);
     const move = legalMoves(state, 3).find(m => m.token === 0) as Move;
     expect(move.to).toBe(8);

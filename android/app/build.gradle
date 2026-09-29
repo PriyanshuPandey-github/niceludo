@@ -75,6 +75,25 @@ def enableProguardInReleaseBuilds = false
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+// -- Read version info from version.js (single source of truth) -----------
+def versionFile = new File(rootProject.projectDir, "../version.js")
+def versionProps = [:]
+versionFile.eachLine { line ->
+    def m = line =~ /(\w+)\s*[:=]\s*['"](.*?)['"]/
+    if (m.find()) {
+        versionProps[m.group(1)] = m.group(2)
+    }
+    def mNum = line =~ /(\w+)\s*[:=]\s*(\d+)/
+    if (mNum.find() && !versionProps.containsKey(mNum.group(1))) {
+        versionProps[mNum.group(1)] = mNum.group(2)
+    }
+}
+def appVersionCode = (versionProps["versionCode"] ?: "1") as Integer
+def appVersionName = versionProps["version"] ?: "1.0.0"
+def appName = versionProps["name"] ?: "NiceLudo"
+def appJsv = versionProps["jsv"] ?: "1.0.0-1"
+// -------------------------------------------------------------------------
+
 android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
@@ -85,8 +104,11 @@ android {
         applicationId "com.niceludo"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode appVersionCode
+        versionName appVersionName
+        // Expose jsv and appName to BuildConfig so JS/native code can read them
+        buildConfigField "String", "APP_NAME", "\"${appName}\""
+        buildConfigField "String", "JS_VERSION", "\"${appJsv}\""
     }
     signingConfigs {
         debug {
